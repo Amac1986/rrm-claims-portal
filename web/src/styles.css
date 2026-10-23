@@ -1,0 +1,21 @@
+:root { font-family: system-ui, sans-serif; color: #1a1a1a; --accent: #0b4f8a; --err: #b00020; }
+body { margin: 0; background: #f6f7f9; }
+header { background: var(--accent); color: #fff; padding: 1rem 2rem; }
+main { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+fieldset { border: 1px solid #c8ccd2; background: #fff; margin: 1rem 0; padding: 1rem; border-radius: 6px; }
+legend { font-weight: 600; padding: 0 .5rem; }
+.field { margin-bottom: 1rem; }
+label { display: block; font-weight: 600; margin-bottom: .25rem; }
+.optional { font-weight: 400; }
+.hint { margin: 0 0 .25rem; color: #4a4f57; font-size: .9rem; }
+input, select, textarea { width: 100%; box-sizing: border-box; font: inherit; padding: .5rem; border: 1px solid #6b7078; border-radius: 4px; }
+.field--invalid input, .field--invalid select, .field--invalid textarea { border: 2px solid var(--err); }
+.error { color: var(--err); font-weight: 600; margin: .25rem 0 0; }
+:focus-visible { outline: 3px solid #ffbf47; outline-offset: 2px; box-shadow: 0 0 0 1px #000; }
+button { font: inherit; padding: .75rem 1.5rem; background: var(--accent); color: #fff; border: 0; border-radius: 4px; cursor: pointer; }
+button:disabled { background: #6b7078; cursor: not-allowed; }
+.summary { border-left: 4px solid var(--err); background: #fdecee; padding: .75rem 1rem; margin: 1rem 0; }
+.claim-number { font-size: 2rem; font-weight: 700; letter-spacing: .05em; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.skip { position: absolute; left: -999px; }
+.skip:focus { left: 0; background: #fff; padding: .5rem; z-index: 1; }
