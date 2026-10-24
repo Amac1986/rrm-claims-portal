@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>ClaimPortal.Api.IntegrationTests</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    Separate from ClaimPortal.Api.Tests on purpose. Unit and validator tests run in
+    milliseconds; this project starts real Postgres and RabbitMQ containers, so folding the
+    two together would charge the container tax to every inner-loop `dotnet test`. Keeping
+    them apart means the fast suite stays fast without relying on everyone remembering a
+    test filter, and a forgotten filter fails towards "fast", not "slow".
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ClaimPortal.Api\ClaimPortal.Api.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+
+    <!-- Boots the real API in-process, with the real Program.cs registrations. -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+
+    <!-- Real PostgreSQL and RabbitMQ, started and torn down by the test run. -->
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Testcontainers.RabbitMq" />
+  </ItemGroup>
+
+</Project>

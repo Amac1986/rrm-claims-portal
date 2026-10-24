@@ -63,6 +63,15 @@
     <PackageVersion Include="Shouldly" Version="4.3.0" />
     <PackageVersion Include="xunit.v3" Version="4.0.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
+    <!--
+      Integration tests: a real HTTP host (WebApplicationFactory) plus real Postgres and
+      RabbitMQ containers. The container image tags themselves are pinned in
+      ClaimPortalStack, deliberately matching docker-compose.yml / docker/rabbitmq rather
+      than floating with a Testcontainers module default.
+    -->
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.13" />
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.16.0" />
+    <PackageVersion Include="Testcontainers.RabbitMq" Version="4.16.0" />
   </ItemGroup>
 
 </Project>
