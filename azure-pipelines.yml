@@ -54,6 +54,8 @@ variables:
     value: ghcr.io
   - name: IMAGE_NAMESPACE
     value: amac1986/rrm-claims-portal
+  - name: IMAGE_SOURCE
+    value: https://github.com/Amac1986/rrm-claims-portal
 
 stages:
   - stage: Restore
@@ -148,8 +150,15 @@ stages:
               path: $(NUGET_PACKAGES)
           - script: dotnet restore ClaimPortal.sln
             displayName: dotnet restore
-          - script: dotnet test ClaimPortal.sln --configuration $(BUILD_CONFIGURATION) --no-restore
-            displayName: dotnet test
+          - script: |
+              set -euo pipefail
+              for project in \
+                tests/ClaimPortal.Domain.Tests/ClaimPortal.Domain.Tests.csproj \
+                tests/ClaimPortal.Api.Tests/ClaimPortal.Api.Tests.csproj \
+                tests/ClaimPortal.Notifications.Tests/ClaimPortal.Notifications.Tests.csproj; do
+                dotnet test "$project" --configuration $(BUILD_CONFIGURATION) --no-restore
+              done
+            displayName: dotnet test (unit suites)
           - task: NodeTool@0
             displayName: Install Node.js $(NODE_VERSION)
             inputs:
@@ -170,9 +179,26 @@ stages:
         displayName: Compose stack end to end
         pool:
           vmImage: ubuntu-latest
-        timeoutInMinutes: 40
+        timeoutInMinutes: 50
         steps:
           - checkout: self
+          - task: UseDotNet@2
+            displayName: Install .NET SDK $(DOTNET_VERSION)
+            inputs:
+              packageType: sdk
+              version: $(DOTNET_VERSION)
+              installationPath: $(Agent.ToolsDirectory)/dotnet
+          - task: Cache@2
+            displayName: Cache NuGet packages
+            inputs:
+              key: 'nuget | "$(Agent.OS)" | Directory.Packages.props'
+              restoreKeys: |
+                nuget | "$(Agent.OS)"
+              path: $(NUGET_PACKAGES)
+          - script: dotnet restore ClaimPortal.sln
+            displayName: dotnet restore
+          - script: dotnet test tests/ClaimPortal.Api.IntegrationTests/ClaimPortal.Api.IntegrationTests.csproj --configuration $(BUILD_CONFIGURATION) --no-restore
+            displayName: Testcontainers integration tests
           - script: docker compose version
             displayName: Show Compose version
           - script: bash scripts/ci/smoke-test.sh
@@ -197,19 +223,20 @@ stages:
               set -euo pipefail
               tag="$(Build.SourceVersion)"
               mkdir -p "$(Build.ArtifactStagingDirectory)/images"
+              label="org.opencontainers.image.source=$(IMAGE_SOURCE)"
 
-              docker build --file docker/api/Dockerfile \
-                --tag "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-api:${tag}" .
-              docker build --file docker/worker/Dockerfile \
-                --tag "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-worker:${tag}" .
-              docker build --file web/Dockerfile \
-                --tag "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-web:${tag}" web
+              docker build --file docker/api/Dockerfile --label "$label" \
+                --tag "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/api:${tag}" .
+              docker build --file docker/worker/Dockerfile --label "$label" \
+                --tag "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/worker:${tag}" .
+              docker build --file web/Dockerfile --label "$label" \
+                --tag "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/web:${tag}" web
 
-              docker save "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-api:${tag}" \
+              docker save "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/api:${tag}" \
                 --output "$(Build.ArtifactStagingDirectory)/images/api.tar"
-              docker save "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-worker:${tag}" \
+              docker save "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/worker:${tag}" \
                 --output "$(Build.ArtifactStagingDirectory)/images/worker.tar"
-              docker save "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-web:${tag}" \
+              docker save "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/web:${tag}" \
                 --output "$(Build.ArtifactStagingDirectory)/images/web.tar"
             displayName: Build and archive images
           - task: PublishPipelineArtifact@1
@@ -245,13 +272,13 @@ stages:
               tag="$(Build.SourceVersion)"
               for component in api worker web; do
                 docker load --input "$(Pipeline.Workspace)/container-images/${component}.tar"
-                docker push "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-${component}:${tag}"
+                docker push "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/${component}:${tag}"
 
                 if [ "$(Build.SourceBranch)" = "refs/heads/main" ]; then
                   docker tag \
-                    "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-${component}:${tag}" \
-                    "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-${component}:latest"
-                  docker push "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-${component}:latest"
+                    "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/${component}:${tag}" \
+                    "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/${component}:latest"
+                  docker push "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/${component}:latest"
                 fi
               done
             displayName: Log in to ghcr.io and push images
@@ -289,11 +316,11 @@ stages:
 
                       tag="$(Build.SourceVersion)"
                       az containerapp update --resource-group "$RESOURCE_GROUP" --name "$API_APP" \
-                        --image "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-api:${tag}"
+                        --image "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/api:${tag}"
                       az containerapp update --resource-group "$RESOURCE_GROUP" --name "$WORKER_APP" \
-                        --image "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-worker:${tag}"
+                        --image "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/worker:${tag}"
                       az containerapp update --resource-group "$RESOURCE_GROUP" --name "$WEB_APP" \
-                        --image "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-web:${tag}"
+                        --image "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/web:${tag}"
                   env:
                     RESOURCE_GROUP: $(AZURE_RESOURCE_GROUP)
                     API_APP: $(AZURE_CONTAINER_APP_API)

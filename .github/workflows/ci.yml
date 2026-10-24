@@ -37,6 +37,7 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
   IMAGE_REGISTRY: ghcr.io
   IMAGE_NAMESPACE: amac1986/rrm-claims-portal
+  IMAGE_SOURCE: https://github.com/Amac1986/rrm-claims-portal
 
 jobs:
   restore:
@@ -99,8 +100,15 @@ jobs:
           cache-dependency-path: Directory.Packages.props
       - name: dotnet restore
         run: dotnet restore ClaimPortal.sln
-      - name: dotnet test
-        run: dotnet test ClaimPortal.sln --configuration Release --no-restore
+      - name: dotnet test (unit suites)
+        run: |
+          set -euo pipefail
+          for project in \
+            tests/ClaimPortal.Domain.Tests/ClaimPortal.Domain.Tests.csproj \
+            tests/ClaimPortal.Api.Tests/ClaimPortal.Api.Tests.csproj \
+            tests/ClaimPortal.Notifications.Tests/ClaimPortal.Notifications.Tests.csproj; do
+            dotnet test "$project" --configuration Release --no-restore
+          done
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
@@ -118,11 +126,19 @@ jobs:
     name: Integration tests
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     env:
       COMPOSE_PROJECT_NAME: rrm-claims-portal-github-ci
     steps:
       - uses: actions/checkout@v4
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+          cache: true
+          cache-dependency-path: Directory.Packages.props
+      - name: dotnet test (Testcontainers integration suite)
+        run: dotnet test tests/ClaimPortal.Api.IntegrationTests/ClaimPortal.Api.IntegrationTests.csproj --configuration Release
       - name: Show Compose version
         run: docker compose version
       - name: docker compose up, submit a claim, verify the email
@@ -142,15 +158,16 @@ jobs:
           set -euo pipefail
           tag="sha-${GITHUB_SHA}"
           mkdir -p dist/images
-          docker build --file docker/api/Dockerfile \
-            --tag "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-api:${tag}" .
-          docker build --file docker/worker/Dockerfile \
-            --tag "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-worker:${tag}" .
-          docker build --file web/Dockerfile \
-            --tag "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-web:${tag}" web
-          docker save "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-api:${tag}" --output dist/images/api.tar
-          docker save "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-worker:${tag}" --output dist/images/worker.tar
-          docker save "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-web:${tag}" --output dist/images/web.tar
+          label="org.opencontainers.image.source=${IMAGE_SOURCE}"
+          docker build --file docker/api/Dockerfile --label "$label" \
+            --tag "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/api:${tag}" .
+          docker build --file docker/worker/Dockerfile --label "$label" \
+            --tag "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/worker:${tag}" .
+          docker build --file web/Dockerfile --label "$label" \
+            --tag "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/web:${tag}" web
+          docker save "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/api:${tag}" --output dist/images/api.tar
+          docker save "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/worker:${tag}" --output dist/images/worker.tar
+          docker save "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/web:${tag}" --output dist/images/web.tar
       - name: Upload container image archive
         uses: actions/upload-artifact@v4
         with:
@@ -187,12 +204,12 @@ jobs:
           tag="sha-${GITHUB_SHA}"
           for component in api worker web; do
             docker load --input "dist/images/${component}.tar"
-            docker push "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-${component}:${tag}"
+            docker push "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${component}:${tag}"
 
             if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
-              docker tag "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-${component}:${tag}" \
-                "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-${component}:latest"
-              docker push "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-${component}:latest"
+              docker tag "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${component}:${tag}" \
+                "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${component}:latest"
+              docker push "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${component}:latest"
             fi
           done
 
@@ -228,8 +245,8 @@ jobs:
           : "${WEB_APP:?set the AZURE_CONTAINER_APP_WEB repository variable}"
 
           az containerapp update --resource-group "$RESOURCE_GROUP" --name "$API_APP" \
-            --image "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-api:${TAG}"
+            --image "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/api:${TAG}"
           az containerapp update --resource-group "$RESOURCE_GROUP" --name "$WORKER_APP" \
-            --image "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-worker:${TAG}"
+            --image "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/worker:${TAG}"
           az containerapp update --resource-group "$RESOURCE_GROUP" --name "$WEB_APP" \
-            --image "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-web:${TAG}"
+            --image "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/web:${TAG}"
