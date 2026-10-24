@@ -1,0 +1,235 @@
+# GitHub Actions - the no-setup fallback pipeline, kept green alongside the primary
+# Azure DevOps definition in azure-pipelines.yml.
+#
+# Same stages as the ADO pipeline: restore, build, unit tests, integration tests, container
+# build, push to ghcr.io, deploy. The deploy stage is gated off by default:
+#   * set the repository variable DEPLOY_ENABLED to "true" to arm it, and
+#   * configure the "production" environment with required reviewers.
+# It authenticates with OIDC workload identity federation (no stored Azure secret).
+#
+# Images are pushed to GitHub Container Registry with the workflow's own GITHUB_TOKEN, so
+# there is no registry password in this repository.
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - feature/rrm-claims-portal-v1
+  pull_request:
+    branches:
+      - main
+      - feature/rrm-claims-portal-v1
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  NODE_VERSION: '22'
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  IMAGE_REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: amac1986/rrm-claims-portal
+
+jobs:
+  restore:
+    name: Restore
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+          cache: true
+          cache-dependency-path: Directory.Packages.props
+      - name: dotnet restore
+        run: dotnet restore ClaimPortal.sln
+
+  build:
+    name: Build
+    needs: restore
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+          cache: true
+          cache-dependency-path: Directory.Packages.props
+      - name: dotnet restore
+        run: dotnet restore ClaimPortal.sln
+      - name: dotnet build
+        run: dotnet build ClaimPortal.sln --configuration Release --no-restore
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: npm ci
+        working-directory: web
+        run: npm ci
+      - name: npm run build
+        working-directory: web
+        run: npm run build
+
+  unit-tests:
+    name: Unit tests
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+          cache: true
+          cache-dependency-path: Directory.Packages.props
+      - name: dotnet restore
+        run: dotnet restore ClaimPortal.sln
+      - name: dotnet test
+        run: dotnet test ClaimPortal.sln --configuration Release --no-restore
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: npm ci
+        working-directory: web
+        run: npm ci
+      - name: npm test
+        working-directory: web
+        run: npm test
+
+  integration-tests:
+    name: Integration tests
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      COMPOSE_PROJECT_NAME: rrm-claims-portal-github-ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show Compose version
+        run: docker compose version
+      - name: docker compose up, submit a claim, verify the email
+        run: bash scripts/ci/smoke-test.sh
+
+  docker-build:
+    name: Docker build
+    needs:
+      - unit-tests
+      - integration-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build container images
+        run: |
+          set -euo pipefail
+          tag="sha-${GITHUB_SHA}"
+          mkdir -p dist/images
+          docker build --file docker/api/Dockerfile \
+            --tag "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-api:${tag}" .
+          docker build --file docker/worker/Dockerfile \
+            --tag "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-worker:${tag}" .
+          docker build --file web/Dockerfile \
+            --tag "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-web:${tag}" web
+          docker save "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-api:${tag}" --output dist/images/api.tar
+          docker save "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-worker:${tag}" --output dist/images/worker.tar
+          docker save "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-web:${tag}" --output dist/images/web.tar
+      - name: Upload container image archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-images
+          path: dist/images/*.tar
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
+  push:
+    name: Push to ghcr.io
+    needs: docker-build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download container image archive
+        uses: actions/download-artifact@v4
+        with:
+          name: container-images
+          path: dist/images
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.IMAGE_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Load and push images
+        run: |
+          set -euo pipefail
+          tag="sha-${GITHUB_SHA}"
+          for component in api worker web; do
+            docker load --input "dist/images/${component}.tar"
+            docker push "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-${component}:${tag}"
+
+            if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+              docker tag "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-${component}:${tag}" \
+                "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-${component}:latest"
+              docker push "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-${component}:latest"
+            fi
+          done
+
+  deploy:
+    name: Deploy
+    needs: push
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Azure login (OIDC workload identity)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Update container app revisions
+        env:
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          API_APP: ${{ vars.AZURE_CONTAINER_APP_API }}
+          WORKER_APP: ${{ vars.AZURE_CONTAINER_APP_WORKER }}
+          WEB_APP: ${{ vars.AZURE_CONTAINER_APP_WEB }}
+          TAG: sha-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          : "${RESOURCE_GROUP:?set the AZURE_RESOURCE_GROUP repository variable}"
+          : "${API_APP:?set the AZURE_CONTAINER_APP_API repository variable}"
+          : "${WORKER_APP:?set the AZURE_CONTAINER_APP_WORKER repository variable}"
+          : "${WEB_APP:?set the AZURE_CONTAINER_APP_WEB repository variable}"
+
+          az containerapp update --resource-group "$RESOURCE_GROUP" --name "$API_APP" \
+            --image "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-api:${TAG}"
+          az containerapp update --resource-group "$RESOURCE_GROUP" --name "$WORKER_APP" \
+            --image "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-worker:${TAG}"
+          az containerapp update --resource-group "$RESOURCE_GROUP" --name "$WEB_APP" \
+            --image "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}-web:${TAG}"

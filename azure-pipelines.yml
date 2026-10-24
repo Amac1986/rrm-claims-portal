@@ -1,0 +1,301 @@
+# Azure DevOps pipeline - the primary CI/CD definition for the Claims Portal.
+#
+# Stages match the GitHub Actions workflow in .github/workflows/ci.yml:
+# restore, build, unit tests, integration tests, container build, push to ghcr.io, deploy.
+# Images go to GitHub Container Registry rather than Azure Container Registry: ACR Basic is
+# a recurring cost with no benefit here, and the repository already lives on GitHub.
+#
+# This file is committed and schema-reviewed but has NOT been run: the repository owner has
+# not created the Azure DevOps organization or linked Azure billing, so Microsoft-hosted
+# parallelism is not granted. The first run will fail with
+# "No hosted parallelism has been purchased or granted" until that is done. See README.md.
+#
+# No credential is stored in this file. GHCR credentials are pipeline secret variables named
+# GHCR_USER and GHCR_TOKEN. Azure deployment uses a workload-identity-federated service
+# connection, not a stored secret, and is disabled unless deployEnabled is set at queue time.
+
+trigger:
+  branches:
+    include:
+      - main
+      - feature/rrm-claims-portal-v1
+
+pr:
+  autoCancel: true
+  branches:
+    include:
+      - main
+      - feature/rrm-claims-portal-v1
+
+parameters:
+  - name: pushImages
+    displayName: Push container images to ghcr.io
+    type: boolean
+    default: true
+  - name: deployEnabled
+    displayName: Deploy to Azure (requires a configured service connection and running apps)
+    type: boolean
+    default: false
+
+variables:
+  - name: DOTNET_VERSION
+    value: '10.0.x'
+  - name: NODE_VERSION
+    value: '22.x'
+  - name: BUILD_CONFIGURATION
+    value: Release
+  - name: DOTNET_NOLOGO
+    value: 'true'
+  - name: DOTNET_CLI_TELEMETRY_OPTOUT
+    value: 'true'
+  - name: NUGET_PACKAGES
+    value: $(Pipeline.Workspace)/.nuget/packages
+  - name: IMAGE_REGISTRY
+    value: ghcr.io
+  - name: IMAGE_NAMESPACE
+    value: amac1986/rrm-claims-portal
+
+stages:
+  - stage: Restore
+    displayName: Restore
+    jobs:
+      - job: Restore
+        displayName: Restore NuGet packages
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 15
+        steps:
+          - checkout: self
+          - task: UseDotNet@2
+            displayName: Install .NET SDK $(DOTNET_VERSION)
+            inputs:
+              packageType: sdk
+              version: $(DOTNET_VERSION)
+              installationPath: $(Agent.ToolsDirectory)/dotnet
+          - task: Cache@2
+            displayName: Cache NuGet packages
+            inputs:
+              key: 'nuget | "$(Agent.OS)" | Directory.Packages.props'
+              restoreKeys: |
+                nuget | "$(Agent.OS)"
+              path: $(NUGET_PACKAGES)
+          - script: dotnet restore ClaimPortal.sln
+            displayName: dotnet restore
+
+  - stage: Build
+    displayName: Build
+    dependsOn: Restore
+    jobs:
+      - job: Build
+        displayName: Build API, worker and web
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 20
+        steps:
+          - checkout: self
+          - task: UseDotNet@2
+            displayName: Install .NET SDK $(DOTNET_VERSION)
+            inputs:
+              packageType: sdk
+              version: $(DOTNET_VERSION)
+              installationPath: $(Agent.ToolsDirectory)/dotnet
+          - task: Cache@2
+            displayName: Cache NuGet packages
+            inputs:
+              key: 'nuget | "$(Agent.OS)" | Directory.Packages.props'
+              restoreKeys: |
+                nuget | "$(Agent.OS)"
+              path: $(NUGET_PACKAGES)
+          - script: dotnet restore ClaimPortal.sln
+            displayName: dotnet restore
+          - script: dotnet build ClaimPortal.sln --configuration $(BUILD_CONFIGURATION) --no-restore
+            displayName: dotnet build
+          - task: NodeTool@0
+            displayName: Install Node.js $(NODE_VERSION)
+            inputs:
+              versionSpec: $(NODE_VERSION)
+              checkLatest: true
+          - script: npm ci
+            displayName: npm ci
+            workingDirectory: web
+          - script: npm run build
+            displayName: npm run build
+            workingDirectory: web
+
+  - stage: UnitTests
+    displayName: Unit tests
+    dependsOn: Build
+    jobs:
+      - job: UnitTests
+        displayName: .NET and web unit tests
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 25
+        steps:
+          - checkout: self
+          - task: UseDotNet@2
+            displayName: Install .NET SDK $(DOTNET_VERSION)
+            inputs:
+              packageType: sdk
+              version: $(DOTNET_VERSION)
+              installationPath: $(Agent.ToolsDirectory)/dotnet
+          - task: Cache@2
+            displayName: Cache NuGet packages
+            inputs:
+              key: 'nuget | "$(Agent.OS)" | Directory.Packages.props'
+              restoreKeys: |
+                nuget | "$(Agent.OS)"
+              path: $(NUGET_PACKAGES)
+          - script: dotnet restore ClaimPortal.sln
+            displayName: dotnet restore
+          - script: dotnet test ClaimPortal.sln --configuration $(BUILD_CONFIGURATION) --no-restore
+            displayName: dotnet test
+          - task: NodeTool@0
+            displayName: Install Node.js $(NODE_VERSION)
+            inputs:
+              versionSpec: $(NODE_VERSION)
+              checkLatest: true
+          - script: npm ci
+            displayName: npm ci
+            workingDirectory: web
+          - script: npm test
+            displayName: npm test
+            workingDirectory: web
+
+  - stage: IntegrationTests
+    displayName: Integration tests
+    dependsOn: Build
+    jobs:
+      - job: IntegrationTests
+        displayName: Compose stack end to end
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 40
+        steps:
+          - checkout: self
+          - script: docker compose version
+            displayName: Show Compose version
+          - script: bash scripts/ci/smoke-test.sh
+            displayName: docker compose up, submit a claim, verify the email
+            env:
+              COMPOSE_PROJECT_NAME: rrm-claims-portal-ado-ci
+
+  - stage: DockerBuild
+    displayName: Docker build
+    dependsOn:
+      - UnitTests
+      - IntegrationTests
+    jobs:
+      - job: DockerBuild
+        displayName: Build api, worker and web images
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 40
+        steps:
+          - checkout: self
+          - script: |
+              set -euo pipefail
+              tag="$(Build.SourceVersion)"
+              mkdir -p "$(Build.ArtifactStagingDirectory)/images"
+
+              docker build --file docker/api/Dockerfile \
+                --tag "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-api:${tag}" .
+              docker build --file docker/worker/Dockerfile \
+                --tag "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-worker:${tag}" .
+              docker build --file web/Dockerfile \
+                --tag "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-web:${tag}" web
+
+              docker save "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-api:${tag}" \
+                --output "$(Build.ArtifactStagingDirectory)/images/api.tar"
+              docker save "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-worker:${tag}" \
+                --output "$(Build.ArtifactStagingDirectory)/images/worker.tar"
+              docker save "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-web:${tag}" \
+                --output "$(Build.ArtifactStagingDirectory)/images/web.tar"
+            displayName: Build and archive images
+          - task: PublishPipelineArtifact@1
+            displayName: Publish container image archive
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)/images
+              artifact: container-images
+
+  - stage: Push
+    displayName: Push to ghcr.io
+    dependsOn: DockerBuild
+    condition: and(succeeded(), ${{ parameters.pushImages }}, ne(variables['Build.Reason'], 'PullRequest'))
+    jobs:
+      - job: Push
+        displayName: Push api, worker and web images
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 30
+        steps:
+          - checkout: self
+          - task: DownloadPipelineArtifact@2
+            displayName: Download container image archive
+            inputs:
+              artifactName: container-images
+              targetPath: $(Pipeline.Workspace)/container-images
+          - script: |
+              set -euo pipefail
+              : "${GHCR_USER:?set GHCR_USER as a pipeline variable}"
+              : "${GHCR_TOKEN:?set GHCR_TOKEN as a secret pipeline variable}"
+              printf '%s' "$GHCR_TOKEN" | docker login "$IMAGE_REGISTRY" \
+                --username "$GHCR_USER" --password-stdin
+
+              tag="$(Build.SourceVersion)"
+              for component in api worker web; do
+                docker load --input "$(Pipeline.Workspace)/container-images/${component}.tar"
+                docker push "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-${component}:${tag}"
+
+                if [ "$(Build.SourceBranch)" = "refs/heads/main" ]; then
+                  docker tag \
+                    "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-${component}:${tag}" \
+                    "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-${component}:latest"
+                  docker push "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-${component}:latest"
+                fi
+              done
+            displayName: Log in to ghcr.io and push images
+            env:
+              GHCR_USER: $(GHCR_USER)
+              GHCR_TOKEN: $(GHCR_TOKEN)
+
+  - stage: Deploy
+    displayName: Deploy (gated)
+    dependsOn: Push
+    condition: and(succeeded(), ${{ parameters.deployEnabled }})
+    jobs:
+      - deployment: Deploy
+        displayName: Update Azure Container Apps
+        environment: rrm-claims-portal-production
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 30
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureCLI@2
+                  displayName: Update container app revisions
+                  inputs:
+                    azureSubscription: rrm-claims-portal-azure
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      : "${RESOURCE_GROUP:?set AZURE_RESOURCE_GROUP as a pipeline variable}"
+                      : "${API_APP:?set AZURE_CONTAINER_APP_API as a pipeline variable}"
+                      : "${WORKER_APP:?set AZURE_CONTAINER_APP_WORKER as a pipeline variable}"
+                      : "${WEB_APP:?set AZURE_CONTAINER_APP_WEB as a pipeline variable}"
+
+                      tag="$(Build.SourceVersion)"
+                      az containerapp update --resource-group "$RESOURCE_GROUP" --name "$API_APP" \
+                        --image "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-api:${tag}"
+                      az containerapp update --resource-group "$RESOURCE_GROUP" --name "$WORKER_APP" \
+                        --image "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-worker:${tag}"
+                      az containerapp update --resource-group "$RESOURCE_GROUP" --name "$WEB_APP" \
+                        --image "$(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)-web:${tag}"
+                  env:
+                    RESOURCE_GROUP: $(AZURE_RESOURCE_GROUP)
+                    API_APP: $(AZURE_CONTAINER_APP_API)
+                    WORKER_APP: $(AZURE_CONTAINER_APP_WORKER)
+                    WEB_APP: $(AZURE_CONTAINER_APP_WEB)
