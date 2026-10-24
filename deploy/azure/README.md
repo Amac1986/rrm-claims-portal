@@ -109,14 +109,52 @@ TLS and backup story. That is a different deployment, not a parameter on this on
 **Decision: keep the managed B1ms.** It is free for the 12-month window this interview sits
 in, it includes backups and patching, and it is cheaper than the smallest viable
 self-hosted Container Apps replica. The only recurring line item that survives the free
-offer is Service Bus Standard at $10/month, which is required because MassTransit publishes
-to topics; Service Bus Basic has no topics and is not a drop-in. The way to avoid ongoing
-cost is teardown after the interview, not a self-hosted database.
+offer is Service Bus Standard at $10/month. MassTransit publishes to topics, and Azure
+Storage Queues are not a transport it supports (see the next section); Service Bus Basic
+has no topics and is not a drop-in either. The way to avoid ongoing cost is teardown after
+the interview, not a self-hosted database.
 
 If the goal is zero Azure spend rather than zero ongoing cost, use the no-deploy fallback:
 run the stack with `docker compose` locally for the demo and hand in this directory as
 infrastructure-as-code that was never applied. That is the option this task explicitly
 allows, and it avoids both the PostgreSQL and Service Bus charges.
+
+## Storage Queue instead of Service Bus: not a drop-in
+
+The question is fair: the flow is one publisher to one consumer, so a queue would be enough
+for the interview. The blocker is not the topology, it is MassTransit. It is pinned to
+8.5.12 (the last Apache-2.0 line), and that line has no Azure Storage Queue transport.
+`MassTransit.Azure.Storage` is MessageData persistence (large payloads in Blob Storage), not
+a transport. Moving the claim-to-notification hop to `Azure.Storage.Queues` therefore means
+removing MassTransit from that path on both sides:
+
+- **The API outbox goes with it.** `ClaimPortal.Api/Program.cs` publishes through
+  `IPublishEndpoint`, and `UseBusOutbox` is what makes the claim row and the
+  `ClaimSubmitted` message commit atomically in the same Postgres transaction. A raw queue
+  needs a hand-written outbox dispatcher, or the deployment gives up that guarantee.
+- **The consumer pipeline goes with it.** `ClaimPortal.Notifications` gets retry, delayed
+  redelivery and the `_error` queue from MassTransit. Storage Queues have no delayed
+  delivery, so the 5/15/60-minute `UseDelayedRedelivery` intervals would become hand-rolled
+  visibility-timeout deferrals, or be dropped, losing the ~90-minute tolerance for a mail
+  relay outage.
+- **`Publish` becomes `Send`.** One consumer today, but `Publish` is the seam that lets a
+  second consumer be added without touching the API; a queue hard-codes the consumer.
+- **KEDA is not the blocker.** Container Apps supports an `azure-queue` scaler, so
+  scale-to-zero would still work.
+
+Cost, for completeness (canadacentral, USD, Retail Prices API): Queue Storage is about
+$0.004 per 10,000 GPv2 LRS operations plus $0.045/GB-month stored, which is cents per month
+at interview volume, against $10/month for Service Bus Standard. The saving is real, but the
+change is a transport rewrite in product code, not a parameter in this directory, and it
+belongs to the transport task (FIR-9).
+
+**Decision: keep Service Bus Standard for the interview.** If the goal is zero Azure spend,
+the no-deploy fallback is the better trade: local `docker compose` on RabbitMQ is free and
+needs no rewrite. If the $10 base unit matters after the interview and a rewrite is not
+acceptable, Service Bus **Basic** has no base unit ($0.05 per million operations) but no
+topics; using it means sending to the notification queue instead of publishing, which is a
+smaller product-code change than replacing MassTransit but still couples the API to the
+queue name, the coupling the current design deliberately avoids.
 
 ## Cost gate and what has not been run
 
