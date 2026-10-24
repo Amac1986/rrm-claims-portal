@@ -87,9 +87,13 @@ grant of 180,000 vCPU-seconds and 360,000 GiB-seconds.
 | Postgres container, 0.5 vCPU / 1 GiB, NFS premium share | ~$47.63 | $17.60 (100 GiB minimum) | none | ~$65.23 |
 | PostgreSQL Flexible Server B1ms | $13.51 | $4.05 storage + up to $3.36 backup | 7 days, managed | $20.91, or **$0 for 12 months** on the free account |
 
-Compute uses the Retail Prices API rates for `canadacentral` (vCPU $0.000034/second, memory
-$0.000004/GiB-second) after the monthly free grant. Storage uses the premium Azure Files
-rate ($0.176/GiB-month) because the durable NFS mount is SSD-only, with a 100 GiB minimum
+Compute uses the Retail Prices API **active** rates for `canadacentral` (vCPU
+$0.000034/second, memory $0.000004/GiB-second) after the monthly free grant. A running
+replica that stays below the activity threshold is billed at the lower idle rate, so
+0.25 vCPU / 0.5 GiB costs roughly $5.73/month idle and $20.03/month active; treat the table
+as the upper bound, not a fixed price. A database doing background work and serving
+connections is not reliably idle. Storage uses the premium Azure Files rate
+($0.176/GiB-month) because the durable NFS mount is SSD-only, with a 100 GiB minimum
 provisioned share.
 
 The storage mount is the catch. Container Apps has no persistent local disk; durable data
