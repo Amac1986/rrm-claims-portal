@@ -9,11 +9,13 @@ const LOSS_LABELS: Record<(typeof LOSS_TYPES)[number], string> = {
   Fire: "Fire", Water: "Water damage", Wind: "Wind", Hail: "Hail", Theft: "Theft", Vandalism: "Vandalism", Other: "Other",
 };
 
-const FIELD_KEYS = new Set<string>([
+// Form order, used to focus the earliest invalid field rather than whichever key the API happened to list first.
+const FIELD_ORDER = [
   "policyNumber", "firstName", "lastName", "email", "phone", "incidentDate", "lossType", "description",
   "estimatedLossAmount", "propertyAddress.addressLine1", "propertyAddress.addressLine2", "propertyAddress.city",
   "propertyAddress.province", "propertyAddress.postalCode",
-]);
+] as const;
+const FIELD_KEYS = new Set<string>(FIELD_ORDER);
 
 function countErrors(o: object): number {
   let n = 0;
@@ -45,13 +47,16 @@ export function ClaimForm({ onSuccess }: { onSuccess: (r: ClaimReceipt) => void 
     } catch (err) {
       if (err instanceof ValidationError) {
         // Server keys are camelCase paths matching our field names exactly (contract section 1).
+        const mapped = new Map<string, string[]>();
         const unmapped: string[] = [];
-        let first: string | null = null;
         for (const [key, msgs] of Object.entries(err.errors)) {
-          if (!FIELD_KEYS.has(key)) { unmapped.push(...msgs); continue; }
-          setError(key as FieldPath<ClaimFormValues>, { type: "server", message: msgs.join(" ") });
-          first ??= key;
+          if (FIELD_KEYS.has(key)) mapped.set(key, msgs);
+          else unmapped.push(...msgs);
         }
+        for (const [key, msgs] of mapped) {
+          setError(key as FieldPath<ClaimFormValues>, { type: "server", message: msgs.join(" ") });
+        }
+        const first = FIELD_ORDER.find((key) => mapped.has(key)) ?? null;
         if (first) setFocus(first as FieldPath<ClaimFormValues>);
         setFormError(
           unmapped.length ? unmapped.join(" ")

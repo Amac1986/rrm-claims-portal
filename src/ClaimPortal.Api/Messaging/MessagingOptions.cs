@@ -11,7 +11,7 @@ public enum MessagingTransport
     /// <summary>The local and self-hosted default.</summary>
     RabbitMq = 1,
 
-    /// <summary>Wired up by FIR-9; present now so the swap stays a configuration value.</summary>
+    /// <summary>The Azure deployment. Selected by the same configuration value as locally.</summary>
     AzureServiceBus = 2,
 }
 
@@ -23,6 +23,25 @@ public sealed class MessagingOptions
     public MessagingTransport Transport { get; set; } = MessagingTransport.RabbitMq;
 
     public RabbitMqOptions RabbitMq { get; set; } = new();
+
+    public AzureServiceBusOptions AzureServiceBus { get; set; } = new();
+}
+
+/// <summary>
+/// Azure Service Bus settings for the publish side. Both members are empty by default so a
+/// local <c>docker compose up</c> can never require an Azure account.
+/// </summary>
+/// <remarks>
+/// <see cref="FullyQualifiedNamespace"/> with <c>DefaultAzureCredential</c> is the intended
+/// production path — no secret is stored. <see cref="ConnectionString"/> exists for a developer
+/// with a personal namespace and for the current Bicep deployment, which passes it as a
+/// Container Apps secret; it is never committed.
+/// </remarks>
+public sealed class AzureServiceBusOptions
+{
+    public string? FullyQualifiedNamespace { get; set; }
+
+    public string? ConnectionString { get; set; }
 }
 
 /// <summary>RabbitMQ connection settings. The password is supplied by the environment.</summary>

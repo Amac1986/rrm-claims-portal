@@ -49,6 +49,27 @@ services:
     environment:
       MP_MAX_MESSAGES: 100
 
+  # Local trace sink. With no HONEYCOMB_API_KEY the API and worker export OTLP here, and the
+  # collector forwards to Jaeger. Open http://localhost:16686 to see the API -> broker -> worker
+  # waterfall. With a key set, the apps export directly to Honeycomb and these two are unused.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.163.2
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./docker/otel/collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    depends_on:
+      - jaeger
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.76.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # trace UI
+
   api:
     build:
       context: .
@@ -64,6 +85,9 @@ services:
       Messaging__RabbitMq__VirtualHost: /
       Messaging__RabbitMq__UserName: guest
       Messaging__RabbitMq__Password: guest
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      HONEYCOMB_API_KEY: ${HONEYCOMB_API_KEY:-}
+      Observability__Environment: local
     ports:
       - "8080:8080"
     depends_on:
@@ -71,6 +95,14 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080; printf \"GET /health/ready HTTP/1.0\\r\\n\\r\\n\" >&3; grep -q \"200 OK\" <&3'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   worker:
     build:
@@ -89,6 +121,12 @@ services:
       Smtp__Host: mailpit
       Smtp__Port: "1025"
       Smtp__SecureSocketOptions: None
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      HONEYCOMB_API_KEY: ${HONEYCOMB_API_KEY:-}
+      Observability__HealthPort: "8081"
+      Observability__Environment: local
+    ports:
+      - "8081:8081"   # worker /health/live and /health/ready
     depends_on:
       postgres:
         condition: service_healthy
@@ -96,6 +134,14 @@ services:
         condition: service_healthy
       mailpit:
         condition: service_started
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081; printf \"GET /health/ready HTTP/1.0\\r\\n\\r\\n\" >&3; grep -q \"200 OK\" <&3'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   web:
     build:

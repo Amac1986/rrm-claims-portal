@@ -6,7 +6,12 @@ interface Props {
   error?: string;
   hint?: string;
   optional?: boolean;
-  children: (aria: { id: string; "aria-invalid": boolean; "aria-describedby"?: string }) => ReactNode;
+  children: (aria: {
+    id: string;
+    "aria-invalid": boolean;
+    "aria-required"?: boolean;
+    "aria-describedby"?: string;
+  }) => ReactNode;
 }
 
 /**
@@ -29,7 +34,13 @@ export function Field({ id, label, error, hint, optional, children }: Props) {
           {hint}
         </p>
       )}
-      {children({ id, "aria-invalid": !!error, "aria-describedby": describedBy })}
+      {children({
+        id,
+        "aria-invalid": !!error,
+        // The visual asterisk is aria-hidden, so expose required-ness to assistive tech explicitly.
+        "aria-required": optional ? undefined : true,
+        "aria-describedby": describedBy,
+      })}
       {error && (
         <p className="error" id={errId} role="alert">
           <span aria-hidden="true">⚠ </span>

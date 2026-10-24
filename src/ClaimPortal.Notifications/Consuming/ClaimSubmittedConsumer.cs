@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using ClaimPortal.Contracts;
 using ClaimPortal.Notifications.Email;
 using ClaimPortal.Notifications.Idempotency;
 using ClaimPortal.Notifications.Templating;
+using ClaimPortal.Observability;
 using MassTransit;
 using Microsoft.Extensions.Logging;
 
@@ -57,8 +59,13 @@ public sealed class ClaimSubmittedConsumer : IConsumer<ClaimSubmitted>
                 + "transport MessageId is the idempotency key (contract §2); refusing to send "
                 + "an email that could not be deduplicated.");
 
+        var headerValue = context.Headers.Get<string>(CorrelationId.HeaderName);
+        var correlationId = CorrelationId.Resolve(headerValue, Activity.Current);
+        Activity.Current?.SetTag(CorrelationId.TagName, correlationId);
+
         using var scope = _logger.BeginScope(new Dictionary<string, object>
         {
+            [CorrelationId.LogPropertyName] = correlationId,
             ["MessageId"] = messageId,
             ["ClaimId"] = claim.ClaimId,
             ["ClaimNumber"] = claim.ClaimNumber,
@@ -100,10 +107,9 @@ public sealed class ClaimSubmittedConsumer : IConsumer<ClaimSubmitted>
 
             _logger.LogWarning(
                 ex,
-                "Attempt {AttemptCount} to email the confirmation for claim {ClaimNumber} to {Recipient} failed.",
+                "Attempt {AttemptCount} to email the confirmation for claim {ClaimNumber} failed.",
                 delivery.AttemptCount,
-                claim.ClaimNumber,
-                email.ToAddress);
+                claim.ClaimNumber);
 
             // Rethrow so MassTransit's retry, delayed redelivery and finally _error apply.
             throw;
@@ -113,9 +119,8 @@ public sealed class ClaimSubmittedConsumer : IConsumer<ClaimSubmitted>
         await _deliveries.MarkSentAsync(messageId, CancellationToken.None);
 
         _logger.LogInformation(
-            "Sent the claim confirmation for {ClaimNumber} to {Recipient} on attempt {AttemptCount}.",
+            "Sent the claim confirmation for {ClaimNumber} on attempt {AttemptCount}.",
             claim.ClaimNumber,
-            email.ToAddress,
             delivery.AttemptCount);
     }
 

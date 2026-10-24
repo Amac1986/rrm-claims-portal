@@ -20,15 +20,19 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ClaimPortal.Contracts\ClaimPortal.Contracts.csproj" />
+    <ProjectReference Include="..\ClaimPortal.Observability\ClaimPortal.Observability.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- Versions live in Directory.Packages.props; see the licence notes there. -->
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
 
     <PackageReference Include="MassTransit" />
     <PackageReference Include="MassTransit.RabbitMQ" />
+    <PackageReference Include="MassTransit.Azure.ServiceBus.Core" />
+    <PackageReference Include="Azure.Identity" />
 
     <PackageReference Include="MailKit" />
     <PackageReference Include="Scriban" />

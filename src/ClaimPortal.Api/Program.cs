@@ -1,15 +1,32 @@
 using System.Text.Json.Serialization;
 using ClaimPortal.Api;
 using ClaimPortal.Api.Messaging;
+using ClaimPortal.Api.Observability;
 using ClaimPortal.Api.Serialization;
 using ClaimPortal.Api.Validation;
 using ClaimPortal.Domain.Claims;
 using ClaimPortal.Infrastructure.Persistence;
+using ClaimPortal.Observability;
+using ClaimPortal.Observability.HealthChecks;
 using FluentValidation;
 using MassTransit;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
+using OpenTelemetry.Trace;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Serilog writes compact JSON to stdout; OpenTelemetry exports one OTLP trace stream. The
+// exporter targets Honeycomb when HONEYCOMB_API_KEY is present and the local collector
+// otherwise, so `docker compose up` needs no account.
+builder.AddClaimPortalObservability("claim-portal-api", tracing => tracing
+    .AddAspNetCoreInstrumentation(options =>
+    {
+        // Health probes every few seconds would bury the claim trace in noise.
+        options.Filter = context => !context.Request.Path.StartsWithSegments("/health");
+    })
+    .AddHttpClientInstrumentation());
 
 builder.Services.AddProblemDetails();
 
@@ -43,6 +60,11 @@ builder.Services.AddOptions<DatabaseOptions>()
 
 builder.Services.AddHostedService<ClaimsDatabaseMigrator>();
 
+// Read once: both the bus and the readiness probe need the same broker settings.
+var messaging = builder.Configuration
+    .GetSection(MessagingOptions.SectionName)
+    .Get<MessagingOptions>() ?? new MessagingOptions();
+
 builder.Services.AddMassTransit(bus =>
 {
     // The transactional outbox lives in the same DbContext as the claim row, so the claim and
@@ -53,10 +75,6 @@ builder.Services.AddMassTransit(bus =>
         outbox.UseBusOutbox();
         outbox.QueryDelay = TimeSpan.FromSeconds(1);
     });
-
-    var messaging = builder.Configuration
-        .GetSection(MessagingOptions.SectionName)
-        .Get<MessagingOptions>() ?? new MessagingOptions();
 
     switch (messaging.Transport)
     {
@@ -86,17 +104,57 @@ builder.Services.AddMassTransit(bus =>
             break;
 
         case MessagingTransport.AzureServiceBus:
-            throw new NotSupportedException(
-                "The Azure Service Bus transport is added by FIR-9. Set Messaging:Transport to RabbitMq or InMemory.");
+            // Same outbox, same event, same entity names as RabbitMQ; only the broker client
+            // changes. `ConfigureEndpoints` is called here too so the publish topology is built
+            // by the transport-neutral code path rather than by anything Service Bus-specific.
+            bus.UsingAzureServiceBus((context, cfg) =>
+            {
+                cfg.ConfigureJsonSerializerOptions(ClaimPortalJson.Configure);
+                ServiceBusHostConfiguration.Configure(cfg, messaging.AzureServiceBus);
+                cfg.ConfigureEndpoints(context);
+            });
+            break;
 
         default:
             throw new NotSupportedException($"Unknown messaging transport '{messaging.Transport}'.");
     }
 });
 
-builder.Services.AddHealthChecks();
+// Liveness is intentionally process-local: it answers "is this process running?" Readiness
+// opens a real Npgsql connection and, on RabbitMQ, a real AMQP connection. A dependency being
+// down must turn the probe red, not return a hard-coded 200.
+var healthChecks = builder.Services.AddHealthChecks()
+    .AddCheck(
+        "postgres",
+        new PostgresHealthCheck(connectionString),
+        tags: ["ready"]);
+
+if (messaging.Transport == MessagingTransport.RabbitMq)
+{
+    healthChecks.AddCheck(
+        "rabbitmq",
+        new RabbitMqHealthCheck(new RabbitMqHealthOptions
+        {
+            Host = messaging.RabbitMq.Host,
+            Port = messaging.RabbitMq.Port,
+            VirtualHost = messaging.RabbitMq.VirtualHost,
+            UserName = messaging.RabbitMq.UserName,
+            Password = messaging.RabbitMq.Password,
+        }),
+        tags: ["ready"]);
+}
 
 var app = builder.Build();
+
+app.UseMiddleware<CorrelationIdMiddleware>();
+
+app.UseSerilogRequestLogging(options =>
+{
+    options.MessageTemplate =
+        "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms";
+    options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
+        diagnosticContext.Set(CorrelationId.LogPropertyName, httpContext.TraceIdentifier);
+});
 
 app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 {
@@ -110,15 +168,21 @@ app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
         type = "https://tools.ietf.org/html/rfc9110#section-15.6.1",
         title = "An unexpected error occurred.",
         status = StatusCodes.Status500InternalServerError,
+        correlationId = context.TraceIdentifier,
     });
 }));
 
-app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = _ => false,
+    ResponseWriter = HealthResponseWriter.WriteJson,
+});
 
-app.MapGet("/health/ready", async (ClaimsDbContext db, CancellationToken cancellationToken) =>
-    await db.Database.CanConnectAsync(cancellationToken)
-        ? Results.Ok(new { status = "ready" })
-        : Results.Json(new { status = "not-ready" }, statusCode: StatusCodes.Status503ServiceUnavailable));
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = registration => registration.Tags.Contains("ready"),
+    ResponseWriter = HealthResponseWriter.WriteJson,
+});
 
 app.MapClaimsEndpoints();
 

@@ -58,8 +58,7 @@ public sealed class SmtpEmailSender : IEmailSender
             await client.DisconnectAsync(quit: true, cancellationToken).ConfigureAwait(false);
 
             _logger.LogInformation(
-                "SMTP accepted confirmation email for {Recipient} via {SmtpHost}:{SmtpPort} in {ElapsedMs}ms. Server said: {SmtpResponse}",
-                message.ToAddress,
+                "SMTP accepted a confirmation email via {SmtpHost}:{SmtpPort} in {ElapsedMs}ms. Server said: {SmtpResponse}",
                 options.Host,
                 options.Port,
                 stopwatch.ElapsedMilliseconds,

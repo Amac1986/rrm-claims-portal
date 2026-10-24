@@ -148,10 +148,19 @@ to this table would need migrations introduced under pressure.
 
 ## 8. Transport selected by configuration
 
-`Messaging:Transport` picks `RabbitMq`, `InMemory` or `AzureServiceBus`; the Service Bus arm is
-wired up by a later task. No endpoint, host or credential is hard-coded anywhere in the
-assembly. `AzureServiceBus` currently throws rather than silently falling back to RabbitMQ,
-which would look like a working deployment while consuming nothing.
+`Messaging:Transport` picks `RabbitMq`, `InMemory` or `AzureServiceBus`. Both the API and the
+worker read the same value: RabbitMQ locally, Service Bus in Azure, `InMemory` in tests. No
+endpoint, host or credential is hard-coded anywhere in the assembly.
+
+The Service Bus arm chooses the host from `Messaging:AzureServiceBus:ConnectionString` or
+`Messaging:AzureServiceBus:FullyQualifiedNamespace` plus `DefaultAzureCredential`. The connection
+string is a secret supplied by name, never committed. If the transport is selected with neither
+setting present, startup fails loudly rather than falling back to RabbitMQ, which would look like
+a working deployment while consuming nothing.
+
+Only registration changes. The consumer, its definition (endpoint name, retry, redelivery), the
+outbox and the idempotency store are transport-neutral; see `docs/TRANSPORT.md` for the full
+switch, what it does and does not abstract, and the limits of what has been verified.
 
 ## 9. `InvariantGlobalization` is off for this project only
 
@@ -186,14 +195,27 @@ failing the send.
 - `global.json` opts `dotnet test` into Microsoft.Testing.Platform, which xunit.v3 requires on
   the .NET 10 SDK.
 
-## 11. Not yet verified
+## 11. Verified status
 
-Docker Desktop does not start on the build machine, so **nothing here has been run against a
-real RabbitMQ, Postgres or Mailpit**. All 34 tests pass against the in-memory transport and
-SQLite, which need none of them. The following are verified by configuration and review only,
-and must be confirmed once Docker is available:
+Everything in this ADR has been exercised against a real stack, not only reviewed. The
+original version of this section said the opposite because Docker was unavailable at the time;
+that is no longer true.
 
-- An end-to-end `docker compose up` → submit a claim → email visible in Mailpit.
-- The Npgsql migration applying against a real Postgres (the SQL is generated and reviewed,
-  and the test suite runs the same model on SQLite via `EnsureCreated`).
-- RabbitMQ delayed redelivery, which needs the broker plugin described in §5.
+- **End to end on Compose.** `docker compose up --build` starts Postgres, RabbitMQ (with the
+  delayed-message plugin), Mailpit, the OpenTelemetry collector, Jaeger, the API, the worker
+  and the web app. A claim submitted through the web origin returns `201`, is committed with
+  its outbox row, is consumed by the worker, and arrives in Mailpit with the same claim
+  number. Reproduced during the pre-hand-in audit as `CLM-20261024-7PNVTD`.
+- **The Npgsql migration against real Postgres.** The API and worker apply their migrations on
+  start; the claim and outbox tables are created in the `public` schema and the delivery table
+  in `notifications`. The Testcontainers integration suite also runs the real migrations
+  against real Postgres, not SQLite.
+- **The delivery protocol on real Postgres.** The `notification_deliveries` row moves
+  claim → sent, and a redelivery of the same `MessageId` does not send a second email.
+- **Azure Service Bus, live.** `Messaging:Transport=AzureServiceBus` is deployed and a claim
+  submitted through the public web origin was consumed from the real namespace by the KEDA-
+  scaled worker and delivered to Mailpit, so the topic/subscription topology works as designed.
+- **Retry and redelivery.** The retry/redelivery paths are covered by the consumer harness
+  tests. They have not been induced against a real broker outage in production, and the
+  `_error` queue has not been observed filling and draining. That remains a documented
+  operator path rather than an exercised one.
