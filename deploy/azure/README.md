@@ -21,8 +21,8 @@ against a live namespace.
 | Resource | Shape | Why |
 | --- | --- | --- |
 | Container Apps environment | Consumption plan, public ingress | Hosts the four container apps. No Dedicated workload profile, no VNet, no private endpoint. |
-| `api` container app | internal HTTP ingress on 8080, `minReplicas: 0` | The web app proxies `/api/` to it; it is not exposed directly. |
-| `worker` container app | no ingress, `minReplicas: 0`, KEDA Service Bus queue scaler | Wakes on `claim-submitted-notifications` queue depth, costs nothing at rest. |
+| `api` container app | internal HTTP ingress on 8080, `minReplicas: 0` | The web app proxies `/api/` to it; it is not exposed directly. Liveness/readiness probes use `/health/live` and `/health/ready`. |
+| `worker` container app | internal HTTP ingress on 8081 only for health probes, `minReplicas: 0`, KEDA Service Bus queue scaler | Wakes on `claim-submitted-notifications` queue depth, costs nothing at rest. The internal ingress exists so Container Apps can probe `/health/live` and `/health/ready`. |
 | `web` container app | external HTTPS ingress on 8080, `minReplicas: 0` | nginx serves the React build and proxies `/api/` to the internal API app. |
 | `mailpit` container app | external HTTP on 8025, internal TCP 1025, `minReplicas: 0` | Catches the confirmation email. The SMTP port is an extra internal TCP mapping, not public. |
 | PostgreSQL Flexible Server | Burstable `Standard_B1ms`, 1 vCore / 2 GiB, 32 GiB storage, 7-day backup, no HA | The free-account-eligible shape. |
@@ -38,9 +38,12 @@ are the contract with the deployment pipeline:
 | `postgres-connection-string` | API, worker | Full Npgsql connection string, including the admin password. |
 | `servicebus-connection-string` | API, worker, Mailpit (KEDA) | Service Bus SAS connection string. |
 | `ghcr-token` | All apps, only when `usePrivateRegistry` is true | GHCR token for private images. |
+| `honeycomb-api-key` | API, worker, only when `honeycombApiKey` is supplied | Honeycomb ingest key, passed as `HONEYCOMB_API_KEY`; the apps then export OTLP to `api.honeycomb.io`. |
 
 No secret value is committed. `main.bicepparam` reads `POSTGRES_ADMIN_PASSWORD`, `GHCR_USER`
-and `GHCR_TOKEN` from the environment.
+and `GHCR_TOKEN` from the environment. The Honeycomb key is intentionally not in the parameter
+file; supply it as a pipeline/Paperclip secret. Without it, the Azure apps start and serve
+traffic with tracing disabled (there is no local collector in Azure).
 
 ## Cost
 

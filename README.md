@@ -38,13 +38,79 @@ Then:
 | Claim form | http://localhost:5173 |
 | Mailpit (the sent email) | http://localhost:8025 |
 | API health | http://localhost:8080/health/live |
+| API readiness | http://localhost:8080/health/ready |
+| Worker health | http://localhost:8081/health/live |
+| Worker readiness | http://localhost:8081/health/ready |
+| Local traces (Jaeger) | http://localhost:16686 |
 | RabbitMQ management (`guest` / `guest`) | http://localhost:15672 |
 
 Submit the form, then open Mailpit. The confirmation email contains the same claim number the
 confirmation screen displayed. `docker compose down -v` followed by `docker compose up` works
 again from a clean database with no manual migration step.
 
-### Try the API directly
+## Observability
+
+`docker compose up` also starts an OpenTelemetry collector and Jaeger, so **no Honeycomb
+account, key or signup is needed**. The API and worker export OTLP to the collector; the
+collector forwards to Jaeger and prints spans to its own log.
+
+### One claim, one trace
+
+```bash
+curl -i -X POST http://localhost:8080/api/claims \
+  -H 'Content-Type: application/json' \
+  -H 'X-Correlation-ID: demo-claim-1' \
+  --data-binary @claim.json
+```
+
+Then:
+
+```bash
+# The same correlation id in both processes' JSON logs:
+docker compose logs api    | grep demo-claim-1
+docker compose logs worker | grep demo-claim-1
+
+# One waterfall with claim-portal-api and claim-portal-worker spans:
+open http://localhost:16686
+```
+
+The trace id is also attached to every log line as `TraceId`, and the correlation id as
+`CorrelationId`. Logs are compact JSON on stdout (no file sinks), which is what a container log
+collector expects. Claimant email, phone and property address are deliberately never logged;
+claim id, claim number and correlation id are.
+
+### Honeycomb
+
+Set the key in the environment, never in a file:
+
+```powershell
+$env:HONEYCOMB_API_KEY = "hny_..."   # a real secret; not committed
+docker compose up --build
+```
+
+With a key present both services export directly to `api.honeycomb.io:443` with the
+`x-honeycomb-team` header. The local collector and Jaeger are then unused. In a deployed
+environment the key is a container/pipeline secret (`HONEYCOMB_API_KEY`), referenced by name.
+
+### Readiness is real
+
+Both `/health/ready` endpoints open a PostgreSQL connection and, on RabbitMQ, a real AMQP
+connection. Stop a dependency and the probe turns `503`:
+
+```bash
+docker compose stop postgres
+curl -i http://localhost:8080/health/ready    # 503, postgres unhealthy
+curl -i http://localhost:8081/health/ready    # 503, postgres unhealthy
+docker compose start postgres
+
+docker compose stop rabbitmq
+curl -i http://localhost:8080/health/ready    # 503, rabbitmq unhealthy
+docker compose start rabbitmq
+```
+
+The Bicep Container Apps use the same paths as liveness/readiness probes.
+
+## Try the API directly
 
 ```bash
 curl -i -X POST http://localhost:8080/api/claims \
@@ -93,6 +159,7 @@ maps directly onto the React form fields. See [`docs/CONTRACT.md`](docs/CONTRACT
 | `src/ClaimPortal.Infrastructure` | EF Core context, mappings, migrations, transactional-outbox tables. |
 | `src/ClaimPortal.Api` | Minimal API, FluentValidation rules, outbox publish path. |
 | `src/ClaimPortal.Notifications` | Worker service: MassTransit consumer, Scriban templates, MailKit SMTP, idempotency. |
+| `src/ClaimPortal.Observability` | Shared Serilog JSON logging, correlation-id constants, OTLP tracing, and Postgres/RabbitMQ health probes. |
 | `web` | React + TypeScript + Vite + React Hook Form/Zod form. |
 | `tests` | Domain (56), API (9) and notification-worker (34) tests. |
 | `docker` | Multi-stage Dockerfiles and the RabbitMQ delayed-message plugin image. |
@@ -244,10 +311,18 @@ az group delete --name rrm-claims-portal --yes --no-wait
 ## Verified status (honest notes)
 
 - `docker compose up --build` brings up Postgres, RabbitMQ (with the delayed-message plugin),
-  Mailpit, the API, the worker and the web app.
+  Mailpit, the OpenTelemetry collector, Jaeger, the API, the worker and the web app.
 - A claim submitted through the React/web origin returns `201`, appears in Postgres with an
   outbox row, is consumed by the worker, and arrives in Mailpit with the same claim number. A
   second claim was verified the same way after the JSON timestamp/enum fixes.
+- Observability was verified against the running Compose stack: one claim produced a single
+  trace containing `POST /api/claims` on `claim-portal-api`, the outbox/send spans, and the
+  receive/process spans on `claim-portal-worker`; the supplied `X-Correlation-ID` appeared in
+  both services' JSON logs with the same `TraceId`. The local collector received and forwarded
+  that trace without any Honeycomb key.
+- Readiness was tested by stopping dependencies: with Postgres stopped, both API and worker
+  `/health/ready` returned `503` with `postgres unhealthy`; with RabbitMQ stopped, both returned
+  `503` with `rabbitmq unhealthy`. `/health/live` stayed `200` throughout, as intended.
 - Invalid submissions return the expected camelCase/dotted error keys.
 - The API, domain and worker build with zero warnings; the .NET and web suites pass.
 - **Not yet verified:** Playwright browser tests (the optional E2E task), the Azure Service Bus

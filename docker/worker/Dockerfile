@@ -24,11 +24,13 @@ WORKDIR /src
 # Only the files restore actually reads are copied here.
 COPY Directory.Build.props Directory.Packages.props ./
 COPY src/ClaimPortal.Contracts/ClaimPortal.Contracts.csproj src/ClaimPortal.Contracts/
+COPY src/ClaimPortal.Observability/ClaimPortal.Observability.csproj src/ClaimPortal.Observability/
 COPY src/ClaimPortal.Notifications/ClaimPortal.Notifications.csproj src/ClaimPortal.Notifications/
 
 RUN dotnet restore src/ClaimPortal.Notifications/ClaimPortal.Notifications.csproj
 
 COPY src/ClaimPortal.Contracts/ src/ClaimPortal.Contracts/
+COPY src/ClaimPortal.Observability/ src/ClaimPortal.Observability/
 COPY src/ClaimPortal.Notifications/ src/ClaimPortal.Notifications/
 
 # No -r/--self-contained: the runtime image already carries the framework.

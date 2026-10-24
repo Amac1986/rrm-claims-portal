@@ -61,6 +61,10 @@ param containerRegistryUsername string = ''
 @secure()
 param containerRegistryPassword string = ''
 
+@description('Honeycomb API key. Leave empty for a deployment without tracing; supply from a pipeline secret, never commit it.')
+@secure()
+param honeycombApiKey string = ''
+
 @description('Create the free-tier Static Web App resource for the React app.')
 param deployStaticWebApp bool = true
 
@@ -208,7 +212,21 @@ var registrySecret = {
   value: containerRegistryPassword
 }
 
+var honeycombSecret = {
+  name: 'honeycomb-api-key'
+  value: honeycombApiKey
+}
+
 var registrySecrets = usePrivateRegistry ? [registrySecret] : []
+var telemetrySecrets = empty(honeycombApiKey) ? [] : [honeycombSecret]
+var telemetryEnv = empty(honeycombApiKey)
+  ? []
+  : [
+      {
+        name: 'HONEYCOMB_API_KEY'
+        secretRef: 'honeycomb-api-key'
+      }
+    ]
 var registries = usePrivateRegistry ? [
   {
     server: containerRegistryServer
@@ -217,12 +235,12 @@ var registries = usePrivateRegistry ? [
   }
 ] : []
 
-var apiSecrets = concat([postgresSecret, serviceBusSecret], registrySecrets)
-var workerSecrets = concat([postgresSecret, serviceBusSecret], registrySecrets)
+var apiSecrets = concat([postgresSecret, serviceBusSecret], registrySecrets, telemetrySecrets)
+var workerSecrets = concat([postgresSecret, serviceBusSecret], registrySecrets, telemetrySecrets)
 var mailpitSecrets = concat([serviceBusSecret], registrySecrets)
 var webSecrets = registrySecrets
 
-var apiEnv = [
+var apiEnv = concat([
   {
     name: 'ASPNETCORE_ENVIRONMENT'
     value: 'Production'
@@ -247,9 +265,9 @@ var apiEnv = [
     name: 'Messaging__AzureServiceBus__ConnectionString'
     secretRef: 'servicebus-connection-string'
   }
-]
+], telemetryEnv)
 
-var workerEnv = [
+var workerEnv = concat([
   {
     name: 'DOTNET_ENVIRONMENT'
     value: 'Production'
@@ -290,7 +308,11 @@ var workerEnv = [
     name: 'Smtp__SecureSocketOptions'
     value: 'None'
   }
-]
+  {
+    name: 'Observability__HealthPort'
+    value: '8081'
+  }
+], telemetryEnv)
 
 var webEnv = [
   {
@@ -337,6 +359,59 @@ var mailpitScaleRules = [
   serviceBusScaleRule
 ]
 
+// Container Apps consumes the same endpoints the local compose healthchecks use. Liveness is
+// process-only; readiness runs the Postgres and broker probes, so a dependency outage removes
+// the replica from rotation instead of returning a hard-coded 200.
+var apiProbes = [
+  {
+    type: 'Liveness'
+    httpGet: {
+      path: '/health/live'
+      port: 8080
+    }
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  }
+  {
+    type: 'Readiness'
+    httpGet: {
+      path: '/health/ready'
+      port: 8080
+    }
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  }
+]
+
+var workerProbes = [
+  {
+    type: 'Liveness'
+    httpGet: {
+      path: '/health/live'
+      port: 8081
+    }
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  }
+  {
+    type: 'Readiness'
+    httpGet: {
+      path: '/health/ready'
+      port: 8081
+    }
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  }
+]
+
 module apiApp 'modules/container-app.bicep' = {
   name: 'api-container-app'
   params: {
@@ -355,6 +430,7 @@ module apiApp 'modules/container-app.bicep' = {
     scaleRules: [
       httpScaleRule
     ]
+    probes: apiProbes
     cpu: '0.25'
     memory: '0.5Gi'
     tags: tags
@@ -371,13 +447,18 @@ module workerApp 'modules/container-app.bicep' = {
     location: location
     environmentId: containerEnvironment.id
     image: workerImage
-    ingressEnabled: false
+    // Internal ingress exists only so Container Apps can probe the worker's /health endpoints.
+    // It is not external; the consumer still talks to Service Bus, not to HTTP.
+    ingressEnabled: true
+    external: false
+    targetPort: 8081
     env: workerEnv
     secrets: workerSecrets
     registries: registries
     minReplicas: 0
     maxReplicas: 3
     scaleRules: workerScaleRules
+    probes: workerProbes
     cpu: '0.25'
     memory: '0.5Gi'
     tags: tags

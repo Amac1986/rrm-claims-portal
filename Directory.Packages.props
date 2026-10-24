@@ -59,6 +59,34 @@
     <PackageVersion Include="Scriban" Version="7.5.1" />
   </ItemGroup>
 
+  <ItemGroup Label="Observability">
+    <!--
+      Structured logging: compact JSON to stdout, no file sinks. Serilog.AspNetCore is only
+      referenced by the API so UseSerilogRequestLogging is available; the worker uses the
+      smaller hosting/console packages.
+    -->
+    <PackageVersion Include="Serilog" Version="4.4.0" />
+    <PackageVersion Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageVersion Include="Serilog.Extensions.Hosting" Version="10.0.0" />
+    <PackageVersion Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageVersion Include="Serilog.Formatting.Compact" Version="3.0.0" />
+
+    <!--
+      Tracing. The OTLP exporter is the only exporter: it targets Honeycomb when a key is
+      present and the local collector otherwise. The AspNetCore/Http instrumentation lives in
+      the API project so the worker never drags in the ASP.NET Core shared framework.
+    -->
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.20.1" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.20.1" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.20.1" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.20.1" />
+
+    <!-- Health checks: the worker probes Postgres and RabbitMQ with the same clients it uses. -->
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.13" />
+    <PackageVersion Include="Npgsql" Version="10.0.3" />
+    <PackageVersion Include="RabbitMQ.Client" Version="7.2.2" />
+  </ItemGroup>
+
   <ItemGroup Label="Testing">
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.11.0" />

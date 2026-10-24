@@ -14,6 +14,7 @@ COPY Directory.Build.props Directory.Packages.props ./
 COPY src/ClaimPortal.Contracts/ClaimPortal.Contracts.csproj src/ClaimPortal.Contracts/
 COPY src/ClaimPortal.Domain/ClaimPortal.Domain.csproj src/ClaimPortal.Domain/
 COPY src/ClaimPortal.Infrastructure/ClaimPortal.Infrastructure.csproj src/ClaimPortal.Infrastructure/
+COPY src/ClaimPortal.Observability/ClaimPortal.Observability.csproj src/ClaimPortal.Observability/
 COPY src/ClaimPortal.Api/ClaimPortal.Api.csproj src/ClaimPortal.Api/
 
 RUN dotnet restore src/ClaimPortal.Api/ClaimPortal.Api.csproj

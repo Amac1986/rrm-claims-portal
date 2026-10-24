@@ -2,6 +2,7 @@ using ClaimPortal.Api.Messaging;
 using ClaimPortal.Contracts;
 using ClaimPortal.Contracts.Api;
 using ClaimPortal.Domain.Claims;
+using ClaimPortal.Observability;
 using FluentValidation;
 using MassTransit;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -31,6 +32,11 @@ internal static class ClaimsEndpoints
         CancellationToken cancellationToken)
     {
         var logger = loggerFactory.CreateLogger("ClaimPortal.Api.Claims");
+
+        // Established by CorrelationIdMiddleware. This exact string is written into the
+        // MassTransit header below, so the API log, broker message and worker log line up.
+        var correlationId = CorrelationContext.Current
+            ?? CorrelationId.Resolve(null, System.Diagnostics.Activity.Current);
 
         var validation = await validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid)
@@ -63,8 +69,12 @@ internal static class ClaimsEndpoints
 
                 // Publish before AddAsync. With UseBusOutbox this writes an outbox row into the
                 // same DbContext; AddAsync's SaveChanges commits the claim and the message in
-                // one transaction.
-                await publisher.Publish(ToEvent(candidate), attemptCancellation);
+                // one transaction. The correlation id rides in the message header, which is
+                // what lets the worker continue the same story in its own log.
+                await publisher.Publish(
+                    ToEvent(candidate),
+                    publish => publish.Headers.Set(CorrelationId.HeaderName, correlationId),
+                    attemptCancellation);
                 await repository.AddAsync(candidate, attemptCancellation);
 
                 return candidate;

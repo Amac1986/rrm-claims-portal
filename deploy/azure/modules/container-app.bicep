@@ -40,6 +40,9 @@ param maxReplicas int = 3
 @description('KEDA and HTTP scale rules.')
 param scaleRules array = []
 
+@description('Container health probes (liveness/readiness/startup).')
+param probes array = []
+
 @description('vCPU allocation for the container.')
 param cpu string = '0.25'
 
@@ -77,6 +80,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             memory: memory
           }
           env: env
+          probes: probes
         }
       ]
       scale: {
