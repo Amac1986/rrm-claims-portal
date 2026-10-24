@@ -221,8 +221,9 @@ the real subscription in an empty `rrm-claims-portal` resource group and predict
 to create**, with no unexpected changes or deletes. It is a read-only preview: no resource was
 created and no provider was registered. The priced shape, the cost gate, the exact commands and
 the teardown are in the [deployment README](deploy/azure/README.md#cost). In short: about
-$10/month with the free-account PostgreSQL offer applying, about $31/month otherwise, with
-Service Bus Standard as the recurring line item. Nothing billable has been created.
+$31/month on this pay-as-you-go subscription, with Service Bus Standard ($10) and PostgreSQL
+($21) as the line items; ~$10/month only if the PostgreSQL free-account offer turns out to
+apply. Nothing billable has been created.
 
 A live deployment is blocked on the FIR-9 Service Bus transport swap: both the API and the worker
 still throw `NotSupportedException` when `Messaging:Transport` is `AzureServiceBus`. The Bicep

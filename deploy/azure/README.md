@@ -70,6 +70,13 @@ The free-account PostgreSQL offer must be verified after provisioning. It is not
 of this template and it does not apply to every subscription. Check Cost Management for the
 resource group, or confirm the offer on the subscription, before assuming the lower number.
 
+**The authenticated subscription is pay-as-you-go.** Its
+`subscriptionPolicies.quotaId` is `PayAsYouGo_2014-09-01` with `spendingLimit: Off`, not a
+free-account quota. The 12-month PostgreSQL offer is a free-account entitlement and, per the
+task, does not apply to pay-as-you-go. There is no subscription metadata here that proves the
+offer is active, so **budget the ~$31/month column**; treat ~$10/month as upside only if Cost
+Management later shows the PostgreSQL meters at zero.
+
 ## Self-hosting PostgreSQL: not cheaper on Container Apps
 
 The managed PostgreSQL line item is the part people ask about first: can we run Postgres
