@@ -1,0 +1,68 @@
+<Project>
+
+  <!--
+    Central package management: every version is pinned here, csproj files carry bare
+    <PackageReference Include="..." /> entries. One place to audit versions and licences.
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup Label="Hosting">
+    <!--
+      The Worker SDK does not reference Microsoft.Extensions.Hosting itself; it only brings the
+      abstractions in transitively. The generic host, the configuration binder and
+      ValidateOnStart all live in this package.
+    -->
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.13" />
+    <!-- ValidateDataAnnotations: options validated at startup rather than on first use. -->
+    <PackageVersion Include="Microsoft.Extensions.Options.DataAnnotations" Version="10.0.13" />
+  </ItemGroup>
+
+  <ItemGroup Label="Validation">
+    <PackageVersion Include="FluentValidation" Version="12.2.0" />
+    <PackageVersion Include="FluentValidation.DependencyInjectionExtensions" Version="12.2.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Persistence">
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.13" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <PackageVersion Include="EFCore.NamingConventions" Version="10.0.1" />
+  </ItemGroup>
+
+  <ItemGroup Label="Messaging">
+    <!--
+      MassTransit is deliberately pinned to the 8.x line. 8.5.12 is Apache-2.0;
+      MassTransit 9.x ships under a commercial licence (massient.com/license), which is
+      the same problem that keeps FluentAssertions v8 out of this repo.
+    -->
+    <PackageVersion Include="MassTransit" Version="8.5.12" />
+    <PackageVersion Include="MassTransit.EntityFrameworkCore" Version="8.5.12" />
+    <PackageVersion Include="MassTransit.RabbitMQ" Version="8.5.12" />
+  </ItemGroup>
+
+  <ItemGroup Label="Notifications">
+    <!-- MailKit/MimeKit: MIT. The only SMTP client worth using on .NET. -->
+    <PackageVersion Include="MailKit" Version="4.18.2" />
+    <!-- Scriban: BSD-2-Clause, single assembly, no runtime compilation step. -->
+    <PackageVersion Include="Scriban" Version="7.5.1" />
+  </ItemGroup>
+
+  <ItemGroup Label="Testing">
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.11.0" />
+    <!--
+      Sqlite, not EF Core's InMemory provider, for the idempotency tests: InMemory does not
+      enforce unique constraints, and the unique constraint *is* the mechanism under test.
+    -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.13" />
+    <!-- Shouldly, not FluentAssertions: FluentAssertions v8 is commercially licensed. -->
+    <PackageVersion Include="Shouldly" Version="4.3.0" />
+    <PackageVersion Include="xunit.v3" Version="4.0.2" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
+  </ItemGroup>
+
+</Project>
