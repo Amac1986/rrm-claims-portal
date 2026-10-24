@@ -293,6 +293,13 @@ $31/month on this pay-as-you-go subscription, with Service Bus Standard ($10) an
 ($21) as the line items; ~$10/month only if the PostgreSQL free-account offer turns out to
 apply. Nothing billable has been created.
 
+The create is currently held on **image delivery**, not on the transport: the GHCR packages are
+private (the repository is private), the template defaults to anonymous pulls, and the CI
+deploy stage does not set registry credentials, so Container Apps would fail its first image
+pull. The template already supports a private-registry credential (`usePrivateRegistry` with
+`GHCR_USER`/`GHCR_TOKEN`); the options and their cost are in the
+[deployment README](deploy/azure/README.md#image-delivery-why-the-create-is-held).
+
 The API and worker now implement the Service Bus arm: `Messaging:Transport=AzureServiceBus` plus
 the namespace connection string selects it, with no consumer or contract change (see
 [`docs/TRANSPORT.md`](docs/TRANSPORT.md)). The Bicep already sets those variables and the

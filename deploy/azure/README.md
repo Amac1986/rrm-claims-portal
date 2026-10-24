@@ -3,18 +3,52 @@
 This directory contains the Bicep for the optional Azure deployment of the Claims Portal.
 
 **Status: authored, offline-validated and `what-if`-verified against a real subscription.
-Not deployed. Nothing billable has been created in Azure.** The deployment is cost-gated:
-the exact shape is priced below, and no billable resource is created until the repository
-owner confirms the number.
+Not deployed. Nothing billable has been created in Azure.**
 
 **Cost shape approved on 2026-10-24: the owner accepted the pay-as-you-go shape at about
-$31/month and instructed that the create be held until FIR-9 (the Service Bus transport
-swap) lands.** FIR-9's transport swap is now implemented in both apps, so the crash-loop
-blocker is gone. The approval authorises this exact shape only; it is not an instruction to
-create resources, so `az deployment group create` stays un-run and the resource group stays
-empty until the owner gives the go-ahead. `what-if` should be re-run to confirm there is no
-drift before the create, bearing in mind the Service Bus transport has not yet been observed
-against a live namespace.
+$31/month, with the create held until FIR-9 (the Service Bus transport swap) landed.** FIR-9
+has landed: both apps now select `AzureServiceBus` from `Messaging__Transport` instead of
+throwing (`src/ClaimPortal.Api/Program.cs`,
+`src/ClaimPortal.Notifications/NotificationsServiceCollectionExtensions.cs`), so the
+crash-loop blocker is gone. `what-if` was re-run after that change and still reports **13 to
+create, 0 to modify, 0 to delete** — no drift from the approved shape.
+
+The create is still un-run, on a different gate: **Container Apps cannot pull the images yet.**
+See [Image delivery](#image-delivery-why-the-create-is-held) for the evidence and the options.
+Creating the stack first would spend about $31/month on four apps that fail their first image
+pull, so `az deployment group create` stays un-run and the resource group stays empty. The
+Service Bus transport also has not yet been observed against a live namespace.
+
+## Image delivery: why the create is held
+
+`main.bicepparam` defaults to `ghcr.io/amac1986/rrm-claims-portal/{api,worker,web}:latest` with
+`usePrivateRegistry = false`, which assumes those packages are anonymously pullable. They are
+not. The GitHub repository is private, so the container packages CI pushes with `GITHUB_TOKEN`
+are private as well: an anonymous request for
+`/v2/amac1986/rrm-claims-portal/api/manifests/latest` returns `401`, and the anonymous pull
+token request returns `UNAUTHORIZED`.
+
+The gaps that follow from that:
+
+- `.github/workflows/ci.yml` pushes `sha-<sha>` images, but its deploy stage only runs
+  `az containerapp update --image ...`. It never configures registry credentials on the apps,
+  so on a private package it would fail the image pull too. That is a pipeline gap owned by
+  the CI/CD task (FIR-10), not something this template can fix.
+- Container Apps needs a pull credential, and this template already supports one: set
+  `usePrivateRegistry = true` and supply `GHCR_USER` / `GHCR_TOKEN` (a token with
+  `read:packages`). No Bicep change is needed for that path.
+
+Options, with cost:
+
+| Option | Extra monthly cost | What it needs |
+| --- | --- | --- |
+| Make the three GHCR packages public | $0 | Owner action in GitHub; the current template then works unchanged |
+| Supply a GHCR token with `read:packages` | $0 | Owner supplies the secret; set `usePrivateRegistry = true` and `GHCR_USER` / `GHCR_TOKEN` |
+| Add an Azure Container Registry (Basic) | **+$5.08** ($0.1666/day, 10 GiB included) | Bicep change plus building and pushing the three images from the runner |
+| No-deploy fallback | $0 | Nothing; demo on local `docker compose` |
+
+Until one of these is chosen the create stays un-run. The stack is otherwise ready: the shape
+is priced, approved and drift-free.
 
 ## What the template creates
 
@@ -194,7 +228,8 @@ subscription, resource group `rrm-claims-portal` (`canadacentral`, empty apart f
 environment, PostgreSQL flexible server + database + firewall rule, the Service Bus
 namespace + SAS rule + queue, the Log Analytics workspace and the Static Web App as
 `+ Create`, with `minReplicas: 0` on all four apps. It is a read-only preview: no resource
-was created and no provider was registered.
+was created and no provider was registered. It was re-run unchanged on 2026-10-24 after FIR-9
+landed: still 13 creates, no drift.
 
 The resource providers are not registered on the subscription yet
 (`Microsoft.App`, `Microsoft.DBforPostgreSQL` and `Microsoft.ServiceBus` all report
@@ -208,10 +243,10 @@ done
 ```
 
 The cost report and the preview output were posted on the task. **The owner accepted the
-pay-as-you-go shape at about $31/month on 2026-10-24, with the create explicitly held until
-FIR-9 (the Service Bus transport swap) lands.** FIR-9 is now implemented in both apps, so the
-crash-loop blocker is gone, but the create is still held: it stays un-run until the owner
-gives the go-ahead. When that comes, re-run `what-if` to confirm there is no drift, then:
+pay-as-you-go shape at about $31/month on 2026-10-24, with the create held until FIR-9 (the
+Service Bus transport swap) landed.** FIR-9 has landed and `what-if` has been re-run with no
+drift, so the shape is ready to create. The only remaining gate is
+[image delivery](#image-delivery-why-the-create-is-held). Once that is resolved, run:
 
 ```bash
 export POSTGRES_ADMIN_PASSWORD='<strong-password>'
@@ -281,3 +316,9 @@ If the cost shape is rejected or the demo runs locally instead, delete the empty
    VNet-integrated. That is acceptable for this disposable demo, but it is not the production
    shape. A VNet-integrated environment and private access would be the next step and would
    also add cost.
+6. **The container images are not pullable yet.** The GHCR packages are private (the repository
+   is private), the template defaults to anonymous pulls, and the CI deploy stage does not set
+   registry credentials. See [Image delivery](#image-delivery-why-the-create-is-held). This is
+   the gate that holds the create; it is not a Bicep defect. The Service Bus transport likewise
+   has not been exercised against a live namespace. The `web` container app remains the working
+   front door once images resolve.
