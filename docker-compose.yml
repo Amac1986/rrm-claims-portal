@@ -1,0 +1,113 @@
+# Full local stack: clone, `docker compose up --build`, open http://localhost:5173.
+#
+# Nothing here needs a cloud account, an API key or a signup. Every credential below is a
+# throwaway local default created by the stack itself.
+#
+# Startup ordering is health-condition based, not sleep based: the API must not migrate
+# before Postgres accepts connections, and the worker must not bind its consumer before
+# RabbitMQ is ready.
+
+name: rrm-claims-portal
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: claimportal
+      POSTGRES_USER: claimportal
+      POSTGRES_PASSWORD: claimportal
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U claimportal -d claimportal"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  rabbitmq:
+    build:
+      context: ./docker/rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # web UI - the reviewer opens this to see the real email
+    environment:
+      MP_MAX_MESSAGES: 100
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Claims: Host=postgres;Port=5432;Database=claimportal;Username=claimportal;Password=claimportal
+      Database__MigrateOnStartup: "true"
+      Messaging__Transport: RabbitMq
+      Messaging__RabbitMq__Host: rabbitmq
+      Messaging__RabbitMq__Port: "5672"
+      Messaging__RabbitMq__VirtualHost: /
+      Messaging__RabbitMq__UserName: guest
+      Messaging__RabbitMq__Password: guest
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+    environment:
+      DOTNET_ENVIRONMENT: Production
+      Database__ConnectionString: Host=postgres;Port=5432;Database=claimportal;Username=claimportal;Password=claimportal
+      Database__MigrateOnStartup: "true"
+      Messaging__Transport: RabbitMq
+      Messaging__RabbitMq__Host: rabbitmq
+      Messaging__RabbitMq__Port: "5672"
+      Messaging__RabbitMq__VirtualHost: /
+      Messaging__RabbitMq__UserName: guest
+      Messaging__RabbitMq__Password: guest
+      Smtp__Host: mailpit
+      Smtp__Port: "1025"
+      Smtp__SecureSocketOptions: None
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    environment:
+      API_UPSTREAM: api:8080
+    ports:
+      - "5173:8080"
+    depends_on:
+      api:
+        condition: service_started
+
+volumes:
+  postgres-data:

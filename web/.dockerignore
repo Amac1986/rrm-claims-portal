@@ -1,0 +1,24 @@
+# Build context for the web image. Context is web/, not the repo root — the web build
+# needs nothing from src/.
+
+# Installed by `npm ci` inside the image. Copying the host's node_modules in would both
+# bloat the context and risk shipping native binaries built for the host platform.
+node_modules/
+
+# Vite output, rebuilt in the image. The repo stopped tracking this in a8a8a1c.
+dist/
+
+# Incremental tsc state — stale state from the host makes `tsc -b` skip work it should do.
+*.tsbuildinfo
+
+# Local env. Vite inlines any VITE_*-prefixed value at build time, so a stray .env.local
+# in the context could bake a developer's local API URL into the shipped bundle.
+.env
+.env.*
+!.env.example
+
+.git/
+.vscode/
+.idea/
+npm-debug.log*
+coverage/
