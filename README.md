@@ -96,7 +96,7 @@ maps directly onto the React form fields. See [`docs/CONTRACT.md`](docs/CONTRACT
 | `web` | React + TypeScript + Vite + React Hook Form/Zod form. |
 | `tests` | Domain (56), API (9) and notification-worker (34) tests. |
 | `docker` | Multi-stage Dockerfiles and the RabbitMQ delayed-message plugin image. |
-| `deploy/azure` | Bicep for the optional Azure deployment, with the costed shape and teardown. Not deployed. |
+| `deploy/azure` | Bicep for the optional Azure deployment, with the costed shape and teardown. `what-if`-verified, not deployed. |
 | `docs` | Frozen contract and architecture decision records. |
 
 ## Design decisions worth knowing
@@ -127,7 +127,10 @@ worker does not call back into the API. Loss description, estimate and address a
 left out of the event.
 
 **Transport is configuration.** `Messaging:Transport` selects `RabbitMq` locally; the Service
-Bus path is reserved for the optional cloud deployment. The consumer does not change.
+Bus path is reserved for the optional cloud deployment. The consumer does not change. MassTransit
+8.5.12 has no Azure Storage Queue transport, so a queue-only broker would be a transport rewrite,
+not a configuration change; the reasoning is in the
+[deployment README](deploy/azure/README.md#storage-queue-instead-of-service-bus-not-a-drop-in).
 
 ## Building and testing locally
 
@@ -196,9 +199,9 @@ Neither file contains a credential.
   `AZURE_CONTAINER_APP_{API,WORKER,WEB}` variables, and the stage only runs when the
   `deployEnabled` queue-time parameter is set.
 - Deployment is cost-gated. The infrastructure-as-code lives in [`deploy/azure/`](deploy/azure/README.md);
-  it has been compiled and linted but not deployed, and no Azure resource has been created for
-  this project. The deploy stage is provided for the owner to arm after the cost decision, not
-  evidence that a cloud deployment happened.
+  it has been compiled, linted and `what-if`-verified but not deployed, and no billable resource
+  has been created for this project. The deploy stage is provided for the owner to arm after the
+  cost decision, not evidence that a cloud deployment happened.
 - Docker 29's BuildKit exports provenance and SBOM attestations by default. GHCR rejected that
   manifest list in this repository, so the pipelines build with `--provenance=false --sbom=false`
   and label images with `org.opencontainers.image.source` to associate the package with the
@@ -212,11 +215,13 @@ Bus Standard, a Free-tier Static Web App and a capped Log Analytics workspace. E
 `minReplicas: 0`; the worker scales on Service Bus queue depth through KEDA, so the stack costs
 nothing at rest and stays inside the Container Apps Consumption free grant at demo volume.
 
-The template is **authored and offline-validated, not deployed**. `bicep build` and `bicep lint`
-both pass with no diagnostics. `az deployment group what-if` has not been run because this build
-host has no Azure CLI or authenticated subscription. The priced shape, the cost gate, the exact
-commands and the teardown are in the [deployment README](deploy/azure/README.md#cost). In short:
-about $10/month with the free-account PostgreSQL offer applying, about $31/month otherwise, with
+The template is **authored, offline-validated and `what-if`-verified, not deployed**. `bicep
+build` and `bicep lint` both pass with no diagnostics. `az deployment group what-if` ran against
+the real subscription in an empty `rrm-claims-portal` resource group and predicted **13 resources
+to create**, with no unexpected changes or deletes. It is a read-only preview: no resource was
+created and no provider was registered. The priced shape, the cost gate, the exact commands and
+the teardown are in the [deployment README](deploy/azure/README.md#cost). In short: about
+$10/month with the free-account PostgreSQL offer applying, about $31/month otherwise, with
 Service Bus Standard as the recurring line item. Nothing billable has been created.
 
 A live deployment is blocked on the FIR-9 Service Bus transport swap: both the API and the worker
@@ -241,8 +246,8 @@ az group delete --name rrm-claims-portal --yes --no-wait
 - Invalid submissions return the expected camelCase/dotted error keys.
 - The API, domain and worker build with zero warnings; the .NET and web suites pass.
 - **Not yet verified:** Playwright browser tests (the optional E2E task) and a live Azure
-  deployment. The Bicep is committed and offline-validated, but it is cost-gated and was not
-  deployed; `what-if` was not run because the build host has no authenticated subscription.
+  deployment. The Bicep is committed, linted and `what-if`-verified (13 resources to create
+  against an empty resource group), but it is cost-gated and was not deployed.
   Azure DevOps is provided but has not run (see
   [CI/CD pipelines](#cicd-pipelines)); GitHub Actions is proven green. No claim is made that
   unrun pipelines or infrastructure work.

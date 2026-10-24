@@ -157,7 +157,7 @@ topics; using it means sending to the notification queue instead of publishing, 
 smaller product-code change than replacing MassTransit but still couples the API to the
 queue name, the coupling the current design deliberately avoids.
 
-## Cost gate and what has not been run
+## Cost gate and `what-if`
 
 The template has been validated offline and previewed against the subscription:
 
@@ -176,6 +176,17 @@ environment, PostgreSQL flexible server + database + firewall rule, the Service 
 namespace + SAS rule + queue, the Log Analytics workspace and the Static Web App as
 `+ Create`, with `minReplicas: 0` on all four apps. It is a read-only preview: no resource
 was created and no provider was registered.
+
+The resource providers are not registered on the subscription yet
+(`Microsoft.App`, `Microsoft.DBforPostgreSQL` and `Microsoft.ServiceBus` all report
+`NotRegistered`). Registering them is free and is a one-time pre-deploy step; the first
+`az deployment group create` will fail without it:
+
+```bash
+for ns in Microsoft.App Microsoft.DBforPostgreSQL Microsoft.ServiceBus Microsoft.OperationalInsights Microsoft.Web; do
+  az provider register --namespace "$ns" --wait
+done
+```
 
 The cost report and the preview output were posted on the task. Creating anything billable
 still waits for the owner's explicit confirmation of the priced shape. Once confirmed:
@@ -213,6 +224,9 @@ az group exists --name rrm-claims-portal
 
 `false` means the group and its resources are deleted. The Static Web App is free, but it is
 inside the same resource group and is removed by the same command.
+
+If the cost shape is rejected or the demo runs locally instead, delete the empty
+`rrm-claims-portal` group with the same command. It contains no billable resource.
 
 ## Known blockers before a live deployment is useful
 
