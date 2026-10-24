@@ -246,7 +246,7 @@ Two definitions run the same eight stages, in the same order:
 | Pipeline | File | What has actually been proven |
 | --- | --- | --- |
 | Azure DevOps (**primary**) | [`azure-pipelines.yml`](azure-pipelines.yml) | **Not run.** The definition is complete and was validated against Microsoft's published pipeline schema, but no Azure DevOps organization or billing link exists, so Microsoft-hosted parallelism is not granted. |
-| GitHub Actions (no-setup fallback) | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | **Green end to end on a real push**, including the GHCR push: [run 40055091388](https://github.com/Amac1986/rrm-claims-portal/actions/runs/40055091388) (commit `3a2f81f`). |
+| GitHub Actions (no-setup fallback) | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | **Green end to end on a real push**, including the Playwright E2E job and the GHCR push: [run 40100651398](https://github.com/Amac1986/rrm-claims-portal/actions/runs/40100651398) (commit `ef4bfdc`). |
 
 The Azure DevOps gate is not a code defect. Microsoft does not grant the free Microsoft-hosted
 parallelism tier automatically: the organization must be linked to an Azure subscription with

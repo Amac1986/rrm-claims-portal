@@ -38,14 +38,8 @@ Email polling uses a bounded timeout (45s) and a short interval, never a fixed s
 
 ## CI wiring
 
-This task owns `web/` only; the pipeline files are owned separately. The integration job
-needs, after the stack is healthy and before `docker compose down`:
-
-```bash
-cd web
-npm ci
-npx playwright install --with-deps chromium
-npm run test:e2e
-```
-
-Upload `web/test-results/` and `web/playwright-report/` as artifacts on failure.
+Both pipelines run a dedicated Playwright E2E job through
+[`scripts/ci/e2e.sh`](../../scripts/ci/e2e.sh), which installs the browser, builds and
+starts the Compose stack, waits for the API, web and Mailpit, runs this suite, and tears
+the stack down. The failures upload `web/test-results/` and `web/playwright-report/` as
+artifacts.
