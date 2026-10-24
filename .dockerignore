@@ -1,0 +1,51 @@
+# Build context for the two .NET images (api, worker). The context is the repo root
+# because central package management puts Directory.Packages.props there, and a restore
+# fails without it.
+#
+# Everything below is either a build output, a local-machine artifact, or the other
+# workstream's source. Shipping bin/ and obj/ into the context is not just slow: host
+# build output for a different RID landing in /src makes `dotnet publish` inside the
+# container non-deterministic.
+
+# .NET build output
+**/bin/
+**/obj/
+
+# Node — the web image has its own context (web/) and its own .dockerignore.
+# node_modules/ here is ~200MB of the wrong platform's binaries.
+**/node_modules/
+web/dist/
+**/*.tsbuildinfo
+
+# Version control and CI
+.git/
+.gitattributes
+.gitignore
+.github/
+
+# Agent and editor local state
+.claude/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Docker's own files. The Dockerfile is passed with -f and does not need to be in the
+# context; excluding them keeps an edit to a compose comment from busting the build cache.
+docker/
+docker-compose*.yml
+.dockerignore
+
+# Docs and local env
+docs/
+*.md
+.env
+.env.*
+!.env.example
+
+# Local secrets must never enter an image layer, even by accident.
+**/appsettings.Local.json
+**/*.pfx
+**/*.key
+**/*.pem

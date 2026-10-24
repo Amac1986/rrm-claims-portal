@@ -1,0 +1,26 @@
+{{ InsurerDisplayName }} - claim received
+
+Hello {{ FirstName }},
+
+We have received your claim. Please keep this claim number for your records
+and quote it whenever you contact us about this loss.
+
+  Claim number:  {{ ClaimNumber }}
+  Policy number: {{ PolicyNumber }}
+  Type of loss:  {{ LossTypeLabel }}
+  Date of loss:  {{ IncidentDate }}
+  Submitted:     {{ SubmittedAt }}
+
+WHAT HAPPENS NEXT
+
+A claims representative will review your submission and contact you within
+one business day. If your property is unsafe or the damage is getting worse,
+call us now rather than waiting for that call.
+
+  Phone: {{ SupportPhone }}
+  Email: {{ SupportEmail }}
+
+This is an automated confirmation that your claim was received. It is not an
+assessment of coverage and it is not an approval or denial of your claim.
+
+{{ InsurerDisplayName }}

@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Deliberately dependency-free: no PackageReference, no ProjectReference, BCL only.
+    The claim model, the claim-number policy and the value objects must be testable and
+    reusable without dragging in EF Core, ASP.NET or FluentValidation.
+  -->
+
+</Project>
