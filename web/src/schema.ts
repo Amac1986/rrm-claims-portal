@@ -17,8 +17,19 @@ export function dateWindow(now = new Date()) {
 const required = (label: string, max: number) =>
   z.string().trim().min(1, `${label} is required.`).max(max, `${label} must be ${max} characters or fewer.`);
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+/** A YYYY-MM-DD string with a real calendar day (rejects 2026-02-30, 2026-13-01, ...). */
+export function isCalendarDate(value: string): boolean {
+  if (!ISO_DATE.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const probe = new Date(0);
+  probe.setUTCHours(0, 0, 0, 0);
+  probe.setUTCFullYear(year, month - 1, day);
+  return probe.getUTCFullYear() === year && probe.getUTCMonth() === month - 1 && probe.getUTCDate() === day;
+}
+
 const POSTAL = /^[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z][ ]?\d[ABCEGHJ-NPRSTV-Z]\d$/i;
-const PHONE_CHARS = /^[\d\s\-+()]+$/;
+const PHONE_CHARS = /^[\d +()-]+$/;
 
 export const claimSchema = z.object({
   policyNumber: required("Policy number", 32),
@@ -41,7 +52,7 @@ export const claimSchema = z.object({
     .min(1, "Date of loss is required.")
     .superRefine((v, ctx) => {
       const { min, max } = dateWindow();
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) ctx.addIssue({ code: "custom", message: "Enter a valid date." });
+      if (!isCalendarDate(v)) ctx.addIssue({ code: "custom", message: "Enter a valid date." });
       else if (v > max) ctx.addIssue({ code: "custom", message: "Date of loss cannot be in the future." });
       else if (v < min) ctx.addIssue({ code: "custom", message: "Date of loss cannot be more than 365 days ago." });
     }),
@@ -57,10 +68,11 @@ export const claimSchema = z.object({
     .trim()
     .refine((v) => v === "" || (/^\d+(\.\d+)?$/.test(v) && Number(v) <= 10_000_000), {
       message: "Enter an amount between 0 and 10,000,000.",
-    }),
+    })
+    .optional(),
   propertyAddress: z.object({
     addressLine1: required("Address", 128),
-    addressLine2: z.string().trim().max(128, "Address line 2 must be 128 characters or fewer."),
+    addressLine2: z.string().trim().max(128, "Address line 2 must be 128 characters or fewer.").optional(),
     city: required("City", 64),
     province: z.enum(PROVINCES, "Select a province or territory."),
     postalCode: z.string().trim().regex(POSTAL, "Enter a postal code like A1A 1A1."),
@@ -93,7 +105,7 @@ export function toRequest(v: z.output<typeof claimSchema>): SubmitClaimRequest {
   const pc = v.propertyAddress.postalCode.replace(/\s+/g, "").toUpperCase();
   return {
     ...v,
-    estimatedLossAmount: v.estimatedLossAmount === "" ? undefined : Number(v.estimatedLossAmount),
+    estimatedLossAmount: v.estimatedLossAmount ? Number(v.estimatedLossAmount) : undefined,
     propertyAddress: {
       ...v.propertyAddress,
       addressLine2: v.propertyAddress.addressLine2 || undefined,
