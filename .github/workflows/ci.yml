@@ -159,11 +159,14 @@ jobs:
           tag="sha-${GITHUB_SHA}"
           mkdir -p dist/images
           label="org.opencontainers.image.source=${IMAGE_SOURCE}"
-          docker build --file docker/api/Dockerfile --label "$label" \
+          # Docker 29's BuildKit exports provenance attestations by default. The saved
+          # manifest list is then rejected by GHCR on push ("denied"), so publish a plain
+          # single-image manifest instead.
+          docker build --provenance=false --sbom=false --file docker/api/Dockerfile --label "$label" \
             --tag "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/api:${tag}" .
-          docker build --file docker/worker/Dockerfile --label "$label" \
+          docker build --provenance=false --sbom=false --file docker/worker/Dockerfile --label "$label" \
             --tag "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/worker:${tag}" .
-          docker build --file web/Dockerfile --label "$label" \
+          docker build --provenance=false --sbom=false --file web/Dockerfile --label "$label" \
             --tag "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/web:${tag}" web
           docker save "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/api:${tag}" --output dist/images/api.tar
           docker save "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/worker:${tag}" --output dist/images/worker.tar
