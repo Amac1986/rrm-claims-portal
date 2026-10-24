@@ -69,6 +69,51 @@ The free-account PostgreSQL offer must be verified after provisioning. It is not
 of this template and it does not apply to every subscription. Check Cost Management for the
 resource group, or confirm the offer on the subscription, before assuming the lower number.
 
+## Self-hosting PostgreSQL: not cheaper on Container Apps
+
+The managed PostgreSQL line item is the part people ask about first: can we run Postgres
+ourselves and avoid it? Technically yes, but on Container Apps it costs more than the
+managed server and gives up backups.
+
+A database cannot use `minReplicas: 0`. The API and worker need it running on the first
+request, and a stopped database loses its process state, so at least one replica is always
+on. That is exactly the usage the free grant does not cover: at 730 hours, one 0.25 vCPU /
+0.5 GiB replica consumes 657,000 vCPU-seconds and 1,314,000 GiB-seconds, against the monthly
+grant of 180,000 vCPU-seconds and 360,000 GiB-seconds.
+
+| Option | Compute/month | Storage/month | Backups | Total/month |
+| --- | --- | --- | --- | --- |
+| Postgres container, 0.25 vCPU / 0.5 GiB, SMB share | ~$20.03 | ~$2.11 for 32 GiB | none | not viable: SMB is not a supported data directory |
+| Postgres container, 0.5 vCPU / 1 GiB, NFS premium share | ~$47.63 | $17.60 (100 GiB minimum) | none | ~$65.23 |
+| PostgreSQL Flexible Server B1ms | $13.51 | $4.05 storage + up to $3.36 backup | 7 days, managed | $20.91, or **$0 for 12 months** on the free account |
+
+Compute uses the Retail Prices API rates for `canadacentral` (vCPU $0.000034/second, memory
+$0.000004/GiB-second) after the monthly free grant. Storage uses the premium Azure Files
+rate ($0.176/GiB-month) because the durable NFS mount is SSD-only, with a 100 GiB minimum
+provisioned share.
+
+The storage mount is the catch. Container Apps has no persistent local disk; durable data
+must live on Azure Files. The SMB share is not a supported PostgreSQL data directory, and
+the NFS share requires a VNet-integrated Container Apps environment and a storage account
+restricted to that VNet. That replaces this template's simple public environment with a
+private network, and it still has no managed backup or patching.
+
+Self-hosting on your own machine or VM is the only genuinely free option, but then the
+Container Apps API and worker need a reachable database endpoint, with its own network,
+TLS and backup story. That is a different deployment, not a parameter on this one.
+
+**Decision: keep the managed B1ms.** It is free for the 12-month window this interview sits
+in, it includes backups and patching, and it is cheaper than the smallest viable
+self-hosted Container Apps replica. The only recurring line item that survives the free
+offer is Service Bus Standard at $10/month, which is required because MassTransit publishes
+to topics; Service Bus Basic has no topics and is not a drop-in. The way to avoid ongoing
+cost is teardown after the interview, not a self-hosted database.
+
+If the goal is zero Azure spend rather than zero ongoing cost, use the no-deploy fallback:
+run the stack with `docker compose` locally for the demo and hand in this directory as
+infrastructure-as-code that was never applied. That is the option this task explicitly
+allows, and it avoids both the PostgreSQL and Service Bus charges.
+
 ## Cost gate and what has not been run
 
 The template has been validated offline:
