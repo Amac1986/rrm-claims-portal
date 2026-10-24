@@ -429,3 +429,6 @@ FodyWeavers.xsd
 
 # Paperclip agent tooling (local only)
 .claude/
+
+# Bicep compiled ARM output
+deploy/azure/*.json

@@ -2,9 +2,10 @@
 
 This directory contains the Bicep for the optional Azure deployment of the Claims Portal.
 
-**Status: authored and offline-validated. Not deployed. Nothing has been created in Azure.**
-The deployment is cost-gated: the exact shape is priced below, and no billable resource is
-created until the repository owner confirms the number.
+**Status: authored, offline-validated and `what-if`-verified against a real subscription.
+Not deployed. Nothing billable has been created in Azure.** The deployment is cost-gated:
+the exact shape is priced below, and no billable resource is created until the repository
+owner confirms the number.
 
 ## What the template creates
 
@@ -158,42 +159,33 @@ queue name, the coupling the current design deliberately avoids.
 
 ## Cost gate and what has not been run
 
-The template has been validated offline:
+The template has been validated offline and previewed against the subscription:
 
 ```text
 bicep build deploy/azure/main.bicep   -> exit 0, no diagnostics
 bicep lint  deploy/azure/main.bicep   -> exit 0, no diagnostics
 bicep build-params deploy/azure/main.bicepparam -> exit 0 (with a dummy password)
+az deployment group what-if -g rrm-claims-portal -p deploy/azure/main.bicepparam
+                                      -> exit 0, 13 resources to create, no changes/errors
 ```
 
-`az deployment group what-if` has **not** been run. The build host does not have the Azure
-CLI installed, the per-machine MSI install requires administrator rights this runner does not
-have, and there is no authenticated subscription on the host. `what-if` is a read-only
-preview, but it needs `az login` and a target resource group.
+The `what-if` preview ran on 2026-10-23 with Azure CLI 2.91.0 against an authenticated
+subscription, resource group `rrm-claims-portal` (`canadacentral`, empty apart from its
+`purpose=interview-whatif` tag). It reported the four container apps, the managed
+environment, PostgreSQL flexible server + database + firewall rule, the Service Bus
+namespace + SAS rule + queue, the Log Analytics workspace and the Static Web App as
+`+ Create`, with `minReplicas: 0` on all four apps. It is a read-only preview: no resource
+was created and no provider was registered.
 
-Run the preview before any create, then post the result on the task and wait for the owner's
-confirmation:
+The cost report and the preview output were posted on the task. Creating anything billable
+still waits for the owner's explicit confirmation of the priced shape. Once confirmed:
 
 ```bash
-az login
-az account set --subscription "<subscription-id>"
-
-# Creating an empty resource group is free, but it is still a write to the subscription.
-az group create --name rrm-claims-portal --location canadacentral
-
 export POSTGRES_ADMIN_PASSWORD='<strong-password>'
 # Only if the GHCR packages are private:
 # export GHCR_USER='<github-user>'
 # export GHCR_TOKEN='<token>'
 
-az deployment group what-if \
-  --resource-group rrm-claims-portal \
-  --parameters deploy/azure/main.bicepparam
-```
-
-After the owner confirms the priced shape:
-
-```bash
 az deployment group create \
   --resource-group rrm-claims-portal \
   --parameters deploy/azure/main.bicepparam
