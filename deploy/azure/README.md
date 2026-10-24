@@ -206,11 +206,9 @@ done
 
 The cost report and the preview output were posted on the task. **The owner accepted the
 pay-as-you-go shape at about $31/month on 2026-10-24, with the create explicitly held until
-FIR-9 lands.** The hold is the operative instruction: FIR-9 is still `in_progress`, both
-`src/ClaimPortal.Api/Program.cs` and
-`src/ClaimPortal.Notifications/NotificationsServiceCollectionExtensions.cs` still throw
-`NotSupportedException` for `MessagingTransport.AzureServiceBus`, and deploying now would
-pay for a stack that cannot serve traffic. Once FIR-9 is merged, re-run `what-if` and then:
+FIR-9 (the Service Bus transport swap) lands.** FIR-9 is now implemented in both apps, so the
+crash-loop blocker is gone, but the create is still held: it stays un-run until the owner
+gives the go-ahead. When that comes, re-run `what-if` to confirm there is no drift, then:
 
 ```bash
 export POSTGRES_ADMIN_PASSWORD='<strong-password>'
