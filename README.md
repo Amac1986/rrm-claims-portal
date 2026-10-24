@@ -143,17 +143,64 @@ $env:LOCALAPPDATA = "$env:USERPROFILE\AppData\Local"
 
 ```bash
 dotnet build ClaimPortal.sln
-dotnet test ClaimPortal.sln          # 99 tests: domain, API validation, notification worker
+dotnet test ClaimPortal.sln          # all .NET suites; integration tests need Docker
 
 cd web
 npm ci
 npm run build
-npm test                             # 23 Vitest/RTL tests
+npm test                             # Vitest/RTL tests
 ```
 
 Tests use Shouldly (not FluentAssertions, which is commercially licensed in v8) and xUnit v3.
 The notification tests run against the MassTransit test harness and SQLite; they do not need a
-broker. End-to-end verification is the Compose stack above.
+broker. The integration test project starts real PostgreSQL and RabbitMQ containers through
+Testcontainers, so it does need Docker. End-to-end verification is the Compose stack above.
+
+## CI/CD pipelines
+
+Two definitions run the same seven stages, in the same order:
+
+| Stage | What it does |
+| --- | --- |
+| Restore | `dotnet restore` with a NuGet cache. |
+| Build | `dotnet build -c Release`, then `npm ci` and `npm run build` for the web app. |
+| Unit tests | The domain, API-validation and notification-worker xUnit suites, plus the Vitest/RTL suite. |
+| Integration tests | The Testcontainers suite against real PostgreSQL and RabbitMQ, then the full Compose stack: submit a claim through the web origin, assert the row is committed, and assert exactly one confirmation email reached Mailpit. |
+| Docker build | Build and archive the API, worker and web images. |
+| Push | On non-PR builds, push `ghcr.io/amac1986/rrm-claims-portal/{api,worker,web}:sha-<commit>` (and `:latest` on `main`). |
+| Deploy | Gated off by default; updates Azure Container Apps using OIDC, with no stored Azure credential. |
+
+| Pipeline | File | What has actually been proven |
+| --- | --- | --- |
+| Azure DevOps (**primary**) | [`azure-pipelines.yml`](azure-pipelines.yml) | **Not run.** The definition is complete and was validated against Microsoft's published pipeline schema, but no Azure DevOps organization or billing link exists, so Microsoft-hosted parallelism is not granted. |
+| GitHub Actions (no-setup fallback) | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | **Green end to end on a real push**, including the GHCR push: [run 40055091388](https://github.com/Amac1986/rrm-claims-portal/actions/runs/40055091388) (commit `3a2f81f`). |
+
+The Azure DevOps gate is not a code defect. Microsoft does not grant the free Microsoft-hosted
+parallelism tier automatically: the organization must be linked to an Azure subscription with
+billing configured. Until that is done, the first ADO run fails with
+`No hosted parallelism has been purchased or granted`; the documented remedy is a request form
+that community reports put at 2-3 business days. Do not read `azure-pipelines.yml` as a pipeline
+that has run.
+
+### Credentials and the deployment gate
+
+Neither file contains a credential.
+
+- GitHub Actions uses its `GITHUB_TOKEN` for GHCR (job-scoped `packages: write`) and GitHub OIDC
+  workload-identity federation for Azure (`id-token: write`). No registry or cloud password is
+  stored.
+- Azure DevOps expects pipeline secret variables `GHCR_USER` and `GHCR_TOKEN` for the GHCR push,
+  and a workload-identity-federated service connection named `rrm-claims-portal-azure` for deploy.
+  The deploy target is selected by the `AZURE_RESOURCE_GROUP` and
+  `AZURE_CONTAINER_APP_{API,WORKER,WEB}` variables, and the stage only runs when the
+  `deployEnabled` queue-time parameter is set.
+- Deployment is cost-gated. No Azure resource has been created for this project; the deploy stage
+  is provided for the owner to arm after the cost decision, not evidence that a cloud deployment
+  happened.
+- Docker 29's BuildKit exports provenance and SBOM attestations by default. GHCR rejected that
+  manifest list in this repository, so the pipelines build with `--provenance=false --sbom=false`
+  and label images with `org.opencontainers.image.source` to associate the package with the
+  repository. Removing those flags makes the push stage fail with `error from registry: denied`.
 
 ## Verified status (honest notes)
 
@@ -163,10 +210,11 @@ broker. End-to-end verification is the Compose stack above.
   outbox row, is consumed by the worker, and arrives in Mailpit with the same claim number. A
   second claim was verified the same way after the JSON timestamp/enum fixes.
 - Invalid submissions return the expected camelCase/dotted error keys.
-- The API, domain and worker build with zero warnings; 99 .NET tests and 23 web tests pass.
-- **Not yet verified:** Playwright browser tests (the optional E2E task), the Azure deployment
-  (cost-gated and intentionally not created), and Azure DevOps (no organization/billing was
-  configured). No claim is made that unrun pipelines or infrastructure work.
+- The API, domain and worker build with zero warnings; the .NET and web suites pass.
+- **Not yet verified:** Playwright browser tests (the optional E2E task) and the Azure deployment
+  (cost-gated and intentionally not created). Azure DevOps is provided but has not run (see
+  [CI/CD pipelines](#cicd-pipelines)); GitHub Actions is proven green. No claim is made that
+  unrun pipelines or infrastructure work.
 
 ## AI use statement
 
