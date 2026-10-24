@@ -230,7 +230,7 @@ Testcontainers, so it does need Docker. End-to-end verification is the Compose s
 
 ## CI/CD pipelines
 
-Two definitions run the same seven stages, in the same order:
+Two definitions run the same eight stages, in the same order:
 
 | Stage | What it does |
 | --- | --- |
@@ -238,6 +238,7 @@ Two definitions run the same seven stages, in the same order:
 | Build | `dotnet build -c Release`, then `npm ci` and `npm run build` for the web app. |
 | Unit tests | The domain, API-validation and notification-worker xUnit suites, plus the Vitest/RTL suite. |
 | Integration tests | The Testcontainers suite against real PostgreSQL and RabbitMQ, then the full Compose stack: submit a claim through the web origin, assert the row is committed, and assert exactly one confirmation email reached Mailpit. |
+| Playwright E2E | Headless Chromium against the full Compose stack: submit the claim form, read the claim number from the confirmation screen, then poll the Mailpit HTTP API until the confirmation email arrives and assert its body contains that number. Also covers a validation-failure submission. See [`web/e2e/README.md`](web/e2e/README.md). |
 | Docker build | Build and archive the API, worker and web images. |
 | Push | On non-PR builds, push `ghcr.io/amac1986/rrm-claims-portal/{api,worker,web}:sha-<commit>` (and `:latest` on `main`). |
 | Deploy | Gated off by default; updates Azure Container Apps using OIDC, with no stored Azure credential. |

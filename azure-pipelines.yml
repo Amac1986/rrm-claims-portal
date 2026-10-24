@@ -1,7 +1,8 @@
 # Azure DevOps pipeline - the primary CI/CD definition for the Claims Portal.
 #
 # Stages match the GitHub Actions workflow in .github/workflows/ci.yml:
-# restore, build, unit tests, integration tests, container build, push to ghcr.io, deploy.
+# restore, build, unit tests, integration tests, Playwright end-to-end tests, container
+# build, push to ghcr.io, deploy.
 # Images go to GitHub Container Registry rather than Azure Container Registry: ACR Basic is
 # a recurring cost with no benefit here, and the repository already lives on GitHub.
 #
@@ -206,11 +207,50 @@ stages:
             env:
               COMPOSE_PROJECT_NAME: rrm-claims-portal-ado-ci
 
+  - stage: EndToEndTests
+    displayName: Playwright E2E
+    dependsOn: Build
+    jobs:
+      - job: EndToEndTests
+        displayName: Browser journey against the Compose stack
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 40
+        steps:
+          - checkout: self
+          - task: NodeTool@0
+            displayName: Install Node.js $(NODE_VERSION)
+            inputs:
+              versionSpec: $(NODE_VERSION)
+              checkLatest: true
+          - script: bash scripts/ci/e2e.sh
+            displayName: Playwright end-to-end tests against the Compose stack
+            env:
+              COMPOSE_PROJECT_NAME: rrm-claims-portal-e2e-ado-ci
+              CI: 'true'
+          - task: CopyFiles@2
+            displayName: Stage Playwright report
+            condition: failed()
+            inputs:
+              sourceFolder: web
+              contents: |
+                playwright-report/**
+                test-results/**
+              targetFolder: $(Build.ArtifactStagingDirectory)/playwright
+              cleanTargetFolder: true
+          - task: PublishPipelineArtifact@1
+            displayName: Publish Playwright report
+            condition: failed()
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)/playwright
+              artifact: playwright-report
+
   - stage: DockerBuild
     displayName: Docker build
     dependsOn:
       - UnitTests
       - IntegrationTests
+      - EndToEndTests
     jobs:
       - job: DockerBuild
         displayName: Build api, worker and web images
