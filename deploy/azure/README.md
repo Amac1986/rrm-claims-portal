@@ -7,6 +7,13 @@ Not deployed. Nothing billable has been created in Azure.** The deployment is co
 the exact shape is priced below, and no billable resource is created until the repository
 owner confirms the number.
 
+**Cost shape approved on 2026-10-24: the owner accepted the pay-as-you-go shape at about
+$31/month and instructed that the create be held until FIR-9 (the Service Bus transport
+swap) lands.** The approval authorises this exact shape only. It is not an instruction to
+create resources while the API and worker would crash-loop, so `az deployment group create`
+stays un-run and the resource group stays empty. After FIR-9 is merged, `what-if` should be
+re-run to confirm there is no drift before the create.
+
 ## What the template creates
 
 | Resource | Shape | Why |
@@ -195,8 +202,13 @@ for ns in Microsoft.App Microsoft.DBforPostgreSQL Microsoft.ServiceBus Microsoft
 done
 ```
 
-The cost report and the preview output were posted on the task. Creating anything billable
-still waits for the owner's explicit confirmation of the priced shape. Once confirmed:
+The cost report and the preview output were posted on the task. **The owner accepted the
+pay-as-you-go shape at about $31/month on 2026-10-24, with the create explicitly held until
+FIR-9 lands.** The hold is the operative instruction: FIR-9 is still `in_progress`, both
+`src/ClaimPortal.Api/Program.cs` and
+`src/ClaimPortal.Notifications/NotificationsServiceCollectionExtensions.cs` still throw
+`NotSupportedException` for `MessagingTransport.AzureServiceBus`, and deploying now would
+pay for a stack that cannot serve traffic. Once FIR-9 is merged, re-run `what-if` and then:
 
 ```bash
 export POSTGRES_ADMIN_PASSWORD='<strong-password>'
