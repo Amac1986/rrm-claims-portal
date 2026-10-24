@@ -126,11 +126,12 @@ tables. The event carries everything the email needs (event-carried state transf
 worker does not call back into the API. Loss description, estimate and address are deliberately
 left out of the event.
 
-**Transport is configuration.** `Messaging:Transport` selects `RabbitMq` locally; the Service
-Bus path is reserved for the optional cloud deployment. The consumer does not change. MassTransit
-8.5.12 has no Azure Storage Queue transport, so a queue-only broker would be a transport rewrite,
-not a configuration change; the reasoning is in the
-[deployment README](deploy/azure/README.md#storage-queue-instead-of-service-bus-not-a-drop-in).
+**Transport is configuration.** `Messaging:Transport` selects `RabbitMq` (the local default) or
+`AzureServiceBus` (the Azure deployment); the consumer, the `ClaimSubmitted` contract and the
+outbox do not change. The switch and exactly what it does and does not abstract are documented in
+[`docs/TRANSPORT.md`](docs/TRANSPORT.md). MassTransit 8.5.12 has no Azure Storage Queue transport,
+so a queue-only broker would be a transport rewrite, not a configuration change; the reasoning is
+in the [deployment README](deploy/azure/README.md#storage-queue-instead-of-service-bus-not-a-drop-in).
 
 ## Building and testing locally
 
@@ -225,11 +226,14 @@ $31/month on this pay-as-you-go subscription, with Service Bus Standard ($10) an
 ($21) as the line items; ~$10/month only if the PostgreSQL free-account offer turns out to
 apply. Nothing billable has been created.
 
-A live deployment is blocked on the FIR-9 Service Bus transport swap: both the API and the worker
-still throw `NotSupportedException` when `Messaging:Transport` is `AzureServiceBus`. The Bicep
-sets the target configuration honestly rather than pretending the apps work today. The Bicep
-defines a free-tier Static Web App but does not wire it; the Container Apps `web` app is the
-working front door once the Service Bus transport lands.
+The API and worker now implement the Service Bus arm: `Messaging:Transport=AzureServiceBus` plus
+the namespace connection string selects it, with no consumer or contract change (see
+[`docs/TRANSPORT.md`](docs/TRANSPORT.md)). The Bicep already sets those variables and the
+`servicebus-connection-string` secret, so the template no longer deploys an app that throws. The
+transport has **not been exercised against a live namespace**: no resource has been created and
+the Service Bus emulator was not run, so the first real deployment is still the moment the
+Service Bus topology and `_error` behaviour are first observed. The Bicep defines a free-tier
+Static Web App but does not wire it; the Container Apps `web` app is the working front door.
 
 Teardown, once the owner has deployed and finished with it:
 
@@ -246,12 +250,12 @@ az group delete --name rrm-claims-portal --yes --no-wait
   second claim was verified the same way after the JSON timestamp/enum fixes.
 - Invalid submissions return the expected camelCase/dotted error keys.
 - The API, domain and worker build with zero warnings; the .NET and web suites pass.
-- **Not yet verified:** Playwright browser tests (the optional E2E task) and a live Azure
-  deployment. The Bicep is committed, linted and `what-if`-verified (13 resources to create
-  against an empty resource group), but it is cost-gated and was not deployed.
-  Azure DevOps is provided but has not run (see
-  [CI/CD pipelines](#cicd-pipelines)); GitHub Actions is proven green. No claim is made that
-  unrun pipelines or infrastructure work.
+- **Not yet verified:** Playwright browser tests (the optional E2E task), the Azure Service Bus
+  transport against a live namespace or emulator, and a live Azure deployment. The Bicep is
+  committed, linted and `what-if`-verified (13 resources to create against an empty resource
+  group), but it is cost-gated and was not deployed. Azure DevOps is provided but has not run
+  (see [CI/CD pipelines](#cicd-pipelines)); GitHub Actions is proven green. No claim is made that
+  unrun pipelines, brokers or infrastructure work.
 
 ## AI use statement
 

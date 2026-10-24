@@ -15,8 +15,8 @@ public enum MessagingTransport
     RabbitMq = 1,
 
     /// <summary>
-    /// The Azure deployment. Wired up by the Service Bus task; this member exists now so the
-    /// swap is a value in <c>Messaging__Transport</c> and not a code change here.
+    /// The Azure deployment. Selected by the same <c>Messaging__Transport</c> value that
+    /// selects RabbitMQ locally; the consumer and its definition do not change.
     /// </summary>
     AzureServiceBus = 2,
 }
@@ -76,7 +76,9 @@ public sealed class RabbitMqOptions
 }
 
 /// <summary>
-/// Azure Service Bus settings, consumed by the Service Bus task.
+/// Azure Service Bus settings. The connection string is a secret and is supplied by name from
+/// the container environment; the namespace form plus <c>DefaultAzureCredential</c> avoids a
+/// stored secret entirely.
 /// </summary>
 /// <remarks>
 /// Both members are optional and empty by default so that nothing here can make a local

@@ -9,10 +9,12 @@ owner confirms the number.
 
 **Cost shape approved on 2026-10-24: the owner accepted the pay-as-you-go shape at about
 $31/month and instructed that the create be held until FIR-9 (the Service Bus transport
-swap) lands.** The approval authorises this exact shape only. It is not an instruction to
-create resources while the API and worker would crash-loop, so `az deployment group create`
-stays un-run and the resource group stays empty. After FIR-9 is merged, `what-if` should be
-re-run to confirm there is no drift before the create.
+swap) lands.** FIR-9's transport swap is now implemented in both apps, so the crash-loop
+blocker is gone. The approval authorises this exact shape only; it is not an instruction to
+create resources, so `az deployment group create` stays un-run and the resource group stays
+empty until the owner gives the go-ahead. `what-if` should be re-run to confirm there is no
+drift before the create, bearing in mind the Service Bus transport has not yet been observed
+against a live namespace.
 
 ## What the template creates
 
@@ -249,17 +251,19 @@ If the cost shape is rejected or the demo runs locally instead, delete the empty
 
 ## Known blockers before a live deployment is useful
 
-1. **Service Bus transport is not implemented yet.** `ClaimPortal.Api/Program.cs` and
-   `ClaimPortal.Notifications/NotificationsServiceCollectionExtensions.cs` both throw
-   `NotSupportedException` for `MessagingTransport.AzureServiceBus` (the FIR-9 transport
-   swap). The Bicep sets `Messaging__Transport=AzureServiceBus` because that is the target
-   shape, so the API and worker will crash-loop until FIR-9 lands. This is a product-code
-   dependency, not an infrastructure defect.
-2. **MassTransit topic naming must match across both apps.** The worker sets
-   `SetKebabCaseEndpointNameFormatter()`; the API does not. The FIR-9 change should make the
-   publish and subscribe topology agree, otherwise the API and worker will use different
-   topic names on Service Bus. The queue name (`claim-submitted-notifications`) is already
-   fixed in configuration and pre-created by Bicep.
+1. **The Service Bus transport has never been run against a live namespace.** FIR-9 wired the
+   transport into `ClaimPortal.Api/Program.cs` and
+   `ClaimPortal.Notifications/NotificationsServiceCollectionExtensions.cs`, and both apps now
+   select it from `Messaging__Transport=AzureServiceBus` instead of throwing. But the then-current
+   Bicep preview is the only evidence: the topology (topic, subscription, auto-forwarding to the
+   queue) and the `_error` versus native dead-letter behaviour are reviewed, not observed. Expect
+   to verify both on first deployment; see `docs/TRANSPORT.md`.
+2. **Topic naming agrees by construction, but confirm it on the first run.** The worker's
+   `SetKebabCaseEndpointNameFormatter()` names the receive endpoint only; it does not change the
+   message entity name. Both apps use the default entity name formatter, so the API publishes to
+   the `ClaimSubmitted` topic and the worker subscribes to it. The queue name
+   (`claim-submitted-notifications`) is fixed in configuration, pre-created by Bicep, and used
+   directly by the consumer definition.
 3. **Static Web Apps is provisioned but not wired.** The Vite build has no API base URL baked
    in; it relies on the nginx proxy in the `web` container. Deploying the same bundle to
    Static Web Apps would need either a linked API backend or an absolute

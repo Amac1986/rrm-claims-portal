@@ -139,11 +139,18 @@ public static class NotificationsServiceCollectionExtensions
                     break;
 
                 case MessagingTransport.AzureServiceBus:
-                    throw new NotSupportedException(
-                        "The Azure Service Bus transport is added by a separate task. Set "
-                        + "Messaging:Transport to RabbitMq or InMemory. Deliberately a loud "
-                        + "failure rather than a silent fallback to RabbitMq, which would look "
-                        + "like a working deployment while consuming nothing.");
+                    // Nothing below this line knows which broker it is on: the consumer, its
+                    // definition, the retry policy and the endpoint name are the identical
+                    // registrations used for RabbitMQ. Topic and queue names are derived from
+                    // the same message and endpoint types, so the two brokers interoperate
+                    // with no per-transport naming.
+                    bus.UsingAzureServiceBus((context, cfg) =>
+                    {
+                        cfg.ConfigureJsonSerializerOptions(WireJson);
+                        ServiceBusHostConfiguration.Configure(cfg, messaging.AzureServiceBus);
+                        cfg.ConfigureEndpoints(context);
+                    });
+                    break;
 
                 default:
                     throw new NotSupportedException($"Unknown messaging transport '{messaging.Transport}'.");

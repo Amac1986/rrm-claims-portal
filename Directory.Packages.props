@@ -42,6 +42,14 @@
     <PackageVersion Include="MassTransit" Version="8.5.12" />
     <PackageVersion Include="MassTransit.EntityFrameworkCore" Version="8.5.12" />
     <PackageVersion Include="MassTransit.RabbitMQ" Version="8.5.12" />
+    <!--
+      The Azure Service Bus transport. The package id is not MassTransit.AzureServiceBus:
+      the 8.x line ships it as MassTransit.Azure.ServiceBus.Core, still Apache-2.0.
+      It brings Azure.Messaging.ServiceBus and Azure.Identity transitively; Azure.Identity
+      is referenced directly below because the code names DefaultAzureCredential.
+    -->
+    <PackageVersion Include="MassTransit.Azure.ServiceBus.Core" Version="8.5.12" />
+    <PackageVersion Include="Azure.Identity" Version="1.21.0" />
   </ItemGroup>
 
   <ItemGroup Label="Notifications">

@@ -148,10 +148,19 @@ to this table would need migrations introduced under pressure.
 
 ## 8. Transport selected by configuration
 
-`Messaging:Transport` picks `RabbitMq`, `InMemory` or `AzureServiceBus`; the Service Bus arm is
-wired up by a later task. No endpoint, host or credential is hard-coded anywhere in the
-assembly. `AzureServiceBus` currently throws rather than silently falling back to RabbitMQ,
-which would look like a working deployment while consuming nothing.
+`Messaging:Transport` picks `RabbitMq`, `InMemory` or `AzureServiceBus`. Both the API and the
+worker read the same value: RabbitMQ locally, Service Bus in Azure, `InMemory` in tests. No
+endpoint, host or credential is hard-coded anywhere in the assembly.
+
+The Service Bus arm chooses the host from `Messaging:AzureServiceBus:ConnectionString` or
+`Messaging:AzureServiceBus:FullyQualifiedNamespace` plus `DefaultAzureCredential`. The connection
+string is a secret supplied by name, never committed. If the transport is selected with neither
+setting present, startup fails loudly rather than falling back to RabbitMQ, which would look like
+a working deployment while consuming nothing.
+
+Only registration changes. The consumer, its definition (endpoint name, retry, redelivery), the
+outbox and the idempotency store are transport-neutral; see `docs/TRANSPORT.md` for the full
+switch, what it does and does not abstract, and the limits of what has been verified.
 
 ## 9. `InvariantGlobalization` is off for this project only
 
@@ -197,3 +206,7 @@ and must be confirmed once Docker is available:
 - The Npgsql migration applying against a real Postgres (the SQL is generated and reviewed,
   and the test suite runs the same model on SQLite via `EnsureCreated`).
 - RabbitMQ delayed redelivery, which needs the broker plugin described in §5.
+- The Azure Service Bus transport end to end. The registration compiles and the configuration
+  switch was exercised, but no live namespace (and no Service Bus emulator) was used, so the
+  Service Bus topic/subscription topology and the `_error` versus native dead-letter behaviour
+  are documented from MassTransit's defaults and reviewed, not observed.

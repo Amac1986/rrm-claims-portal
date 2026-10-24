@@ -86,8 +86,16 @@ builder.Services.AddMassTransit(bus =>
             break;
 
         case MessagingTransport.AzureServiceBus:
-            throw new NotSupportedException(
-                "The Azure Service Bus transport is added by FIR-9. Set Messaging:Transport to RabbitMq or InMemory.");
+            // Same outbox, same event, same entity names as RabbitMQ; only the broker client
+            // changes. `ConfigureEndpoints` is called here too so the publish topology is built
+            // by the transport-neutral code path rather than by anything Service Bus-specific.
+            bus.UsingAzureServiceBus((context, cfg) =>
+            {
+                cfg.ConfigureJsonSerializerOptions(ClaimPortalJson.Configure);
+                ServiceBusHostConfiguration.Configure(cfg, messaging.AzureServiceBus);
+                cfg.ConfigureEndpoints(context);
+            });
+            break;
 
         default:
             throw new NotSupportedException($"Unknown messaging transport '{messaging.Transport}'.");
