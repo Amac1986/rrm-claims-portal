@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <UserSecretsId>claimportal-notifications</UserSecretsId>
+    <RootNamespace>ClaimPortal.Notifications</RootNamespace>
+
+    <!--
+      Overrides the repo-wide InvariantGlobalization=true from Directory.Build.props, for this
+      project only. The API and the domain have no locale-sensitive behaviour and are right to
+      stay invariant, but this worker's entire output is customer-facing prose: it formats the
+      incident date as "October 24, 2026" in en-CA and converts the submission timestamp into
+      America/Winnipeg. Invariant mode cannot resolve either an en-CA culture or an IANA time
+      zone id, so the confirmation email would silently degrade to UTC timestamps.
+      The cost is that the runtime image must carry ICU and tzdata rather than being a
+      -alpine/-composite slim build; that is a Dockerfile line, and a correct timestamp in a
+      policyholder's inbox is worth more than the few MB.
+    -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClaimPortal.Contracts\ClaimPortal.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Versions live in Directory.Packages.props; see the licence notes there. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" />
+
+    <PackageReference Include="MassTransit" />
+    <PackageReference Include="MassTransit.RabbitMQ" />
+
+    <PackageReference Include="MailKit" />
+    <PackageReference Include="Scriban" />
+
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="EFCore.NamingConventions" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Templates ship inside the assembly so the container image needs no content layout. -->
+    <EmbeddedResource Include="Templating\Templates\**\*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ClaimPortal.Notifications.Tests" />
+  </ItemGroup>
+
+</Project>

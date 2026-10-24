@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>ClaimPortal.Notifications.Tests</RootNamespace>
+
+    <!--
+      Must match the worker, for the same reason — see ClaimPortal.Notifications.csproj.
+      InvariantGlobalization is a property of the running process, so the test host needs it
+      too or the renderer tests assert against a UTC fallback the real worker never takes.
+    -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ClaimPortal.Notifications\ClaimPortal.Notifications.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <!--
+      xunit.v3 runs on Microsoft.Testing.Platform, which the .NET 10 SDK drives directly, so
+      the xunit.runner.visualstudio VSTest adapter is deliberately not referenced. The
+      `dotnet test` opt-in for MTP lives in global.json at the repo root; without it the SDK
+      falls back to the VSTest host and fails before running a single test.
+    -->
+    <PackageReference Include="xunit.v3" />
+    <!-- Shouldly, not FluentAssertions: FluentAssertions v8 is commercially licensed. -->
+    <PackageReference Include="Shouldly" />
+
+    <!-- FakeTimeProvider: crosses the five-minute stale-claim window without waiting for it. -->
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+
+    <!--
+      SQLite rather than EF Core's InMemory provider. InMemory does not enforce unique
+      constraints, and the primary-key violation *is* the deduplication mechanism under test —
+      the idempotency tests would pass against a provider that cannot fail the way production
+      fails, which is worse than having no tests.
+    -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+  </ItemGroup>
+
+</Project>
