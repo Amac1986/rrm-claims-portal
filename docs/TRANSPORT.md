@@ -87,8 +87,10 @@ Local defaults are unchanged. `docker-compose.yml` sets `Messaging__Transport=Ra
   pass unchanged.
 - Selecting `AzureServiceBus` without credentials fails with the explicit configuration error;
   it is not a silent RabbitMQ fallback.
-- **Not verified against a live Azure Service Bus namespace or the Service Bus emulator.**
-  The deployment is cost-gated and no billable resource has been created. The Bicep has been
-  compiled, linted and `what-if`-verified only. In particular, the `_error` and native
-  dead-letter behaviour described above comes from MassTransit's documented default topology
-  and the Bicep queue settings, not from an observed run.
+- **Verified against a live Azure Service Bus namespace.** The deployed stack runs with
+  `Messaging:Transport=AzureServiceBus`; a claim submitted through the public web origin was
+  persisted, published to the real namespace, consumed by the KEDA-scaled worker and delivered
+  to the live Mailpit with its claim number. The topic/subscription topology and the
+  queue-depth scaling therefore work as designed.
+- **Not verified:** an induced broker outage (so `_error` filling and draining has not been
+  observed on a real namespace), and the Service Bus emulator, which was not used.

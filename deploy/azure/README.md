@@ -2,66 +2,52 @@
 
 This directory contains the Bicep for the optional Azure deployment of the Claims Portal.
 
-**Status: authored, offline-validated and `what-if`-verified against a real subscription.
-Not deployed. Nothing billable has been created in Azure.**
+**Status: deployed and verified on 2026-10-24.** The stack is running in resource group
+`rrm-claims-portal` (`canadacentral`), from deployment `rrm-claims-portal-20261024e`. The
+committed template is the template that was deployed, and a re-run of `what-if` after the
+last repository audit shows no meaningful drift (see [Drift check](#drift-check)).
 
-**Cost shape approved on 2026-10-24: the owner accepted the pay-as-you-go shape at about
-$31/month, with the create held until FIR-9 (the Service Bus transport swap) landed.** FIR-9
-has landed: both apps now select `AzureServiceBus` from `Messaging__Transport` instead of
-throwing (`src/ClaimPortal.Api/Program.cs`,
-`src/ClaimPortal.Notifications/NotificationsServiceCollectionExtensions.cs`), so the
-crash-loop blocker is gone. `what-if` was re-run after that change and still reports **13 to
-create, 0 to modify, 0 to delete** — no drift from the approved shape.
+| Endpoint | URL |
+| --- | --- |
+| Claim form | https://rrmclaims-web.nicestone-07c13314.canadacentral.azurecontainerapps.io |
+| Mailpit (the sent email) | https://rrmclaims-mailpit.nicestone-07c13314.canadacentral.azurecontainerapps.io |
+| Registry | `rrmclaimsacrt6vxm763riyoo.azurecr.io` (ACR Basic) |
+| Resource group | `rrm-claims-portal`, `canadacentral` |
 
-The create is still un-run, on a different gate: **Container Apps cannot pull the images yet.**
-See [Image delivery](#image-delivery-why-the-create-is-held) for the evidence and the options.
-Creating the stack first would spend about $31/month on four apps that fail their first image
-pull, so `az deployment group create` stays un-run and the resource group stays empty. The
-Service Bus transport also has not yet been observed against a live namespace.
+**Teardown is one command and stops all cost:**
 
-## Image delivery: why the create is held
+```bash
+az group delete --name rrm-claims-portal --yes --no-wait
+```
 
-`main.bicepparam` defaults to `ghcr.io/amac1986/rrm-claims-portal/{api,worker,web}:latest` with
-`usePrivateRegistry = false`, which assumes those packages are anonymously pullable. They are
-not. The GitHub repository is private, so the container packages CI pushes with `GITHUB_TOKEN`
-are private as well: an anonymous request for
-`/v2/amac1986/rrm-claims-portal/api/manifests/latest` returns `401`, and the anonymous pull
-token request returns `UNAUTHORIZED`.
+## What was verified on the live deployment
 
-The gaps that follow from that:
+| Check | Result |
+| --- | --- |
+| `POST /api/claims` through the public web origin | `201`, claim `CLM-20261024-VR1FK4` |
+| PostgreSQL row | persisted with status `Received` |
+| Service Bus queue | message consumed, queue depth back to 0 |
+| Worker | KEDA scaled 0 → 1 on queue depth, then back to 0 |
+| Mailpit | one email, subject `Red River Mutual claim CLM-20261024-VR1FK4 received`, body contains the claim number |
+| `/health/live` and `/health/ready` | `200` on API and worker |
+| Scale-to-zero | web, API, worker and Mailpit all sit at zero replicas when idle |
 
-- `.github/workflows/ci.yml` pushes `sha-<sha>` images, but its deploy stage only runs
-  `az containerapp update --image ...`. It never configures registry credentials on the apps,
-  so on a private package it would fail the image pull too. That is a pipeline gap owned by
-  the CI/CD task (FIR-10), not something this template can fix.
-- Container Apps needs a pull credential, and this template already supports one: set
-  `usePrivateRegistry = true` and supply `GHCR_USER` / `GHCR_TOKEN` (a token with
-  `read:packages`). No Bicep change is needed for that path.
-
-Options, with cost:
-
-| Option | Extra monthly cost | What it needs |
-| --- | --- | --- |
-| Make the three GHCR packages public | $0 | Owner action in GitHub; the current template then works unchanged |
-| Supply a GHCR token with `read:packages` | $0 | Owner supplies the secret; set `usePrivateRegistry = true` and `GHCR_USER` / `GHCR_TOKEN` |
-| Add an Azure Container Registry (Basic) | **+$5.08** ($0.1666/day, 10 GiB included) | Bicep change plus building and pushing the three images from the runner |
-| No-deploy fallback | $0 | Nothing; demo on local `docker compose` |
-
-Until one of these is chosen the create stays un-run. The stack is otherwise ready: the shape
-is priced, approved and drift-free.
+A first request after idle takes roughly 30–60 seconds while the apps cold-start. That is the
+price of staying inside the Container Apps free grant and is expected, not a fault.
 
 ## What the template creates
 
 | Resource | Shape | Why |
 | --- | --- | --- |
 | Container Apps environment | Consumption plan, public ingress | Hosts the four container apps. No Dedicated workload profile, no VNet, no private endpoint. |
-| `api` container app | internal HTTP ingress on 8080, `minReplicas: 0` | The web app proxies `/api/` to it; it is not exposed directly. Liveness/readiness probes use `/health/live` and `/health/ready`. |
-| `worker` container app | internal HTTP ingress on 8081 only for health probes, `minReplicas: 0`, KEDA Service Bus queue scaler | Wakes on `claim-submitted-notifications` queue depth, costs nothing at rest. The internal ingress exists so Container Apps can probe `/health/live` and `/health/ready`. |
+| `api` container app | internal HTTP ingress on 8080, `minReplicas: 0`, `allowInsecure: true` | The web app proxies `/api/` to it; it is not exposed directly. `allowInsecure` is required because the in-environment proxy talks plain HTTP and otherwise receives a `301`. |
+| `worker` container app | internal HTTP ingress on 8081 only for health probes, `minReplicas: 0`, KEDA Service Bus queue scaler | Wakes on `claim-submitted-notifications` queue depth, costs nothing at rest. |
 | `web` container app | external HTTPS ingress on 8080, `minReplicas: 0` | nginx serves the React build and proxies `/api/` to the internal API app. |
-| `mailpit` container app | external HTTP on 8025, internal TCP 1025, `minReplicas: 0` | Catches the confirmation email. The SMTP port is an extra internal TCP mapping, not public. |
+| `mailpit` container app | external HTTP on 8025, internal TCP 1025, `minReplicas: 0` | Catches the confirmation email. The SMTP port is an internal TCP mapping, not public. |
+| Azure Container Registry | Basic, admin user enabled | Holds the three images. The repository is private, so anonymous GHCR pulls fail; an ACR keeps the deployment self-contained. |
 | PostgreSQL Flexible Server | Burstable `Standard_B1ms`, 1 vCore / 2 GiB, 32 GiB storage, 7-day backup, no HA | The free-account-eligible shape. |
 | Service Bus | Standard namespace, `claim-submitted-notifications` queue, namespace-scoped SAS rule | Standard is required for MassTransit topics. The queue is pre-created so KEDA has something to measure. |
-| Static Web Apps | Free tier | Defined for the React app, but not wired to a deployment in this slice; the Container Apps `web` app is the working front door. |
+| Static Web Apps | Free tier, `centralus` | Defined for the React app, but not wired to a deployment; the `web` container app is the working front door. Static Web Apps is not offered in `canadacentral`. |
 | Log Analytics workspace | `PerGB2018`, 30-day retention, 0.1 GB/day cap | Container Apps environment logs. The cap keeps usage inside the 5 GB/month free allowance. |
 
 Secrets are Container Apps secrets referenced by name from environment variables. The names
@@ -71,13 +57,35 @@ are the contract with the deployment pipeline:
 | --- | --- | --- |
 | `postgres-connection-string` | API, worker | Full Npgsql connection string, including the admin password. |
 | `servicebus-connection-string` | API, worker, Mailpit (KEDA) | Service Bus SAS connection string. |
-| `ghcr-token` | All apps, only when `usePrivateRegistry` is true | GHCR token for private images. |
-| `honeycomb-api-key` | API, worker, only when `honeycombApiKey` is supplied | Honeycomb ingest key, passed as `HONEYCOMB_API_KEY`; the apps then export OTLP to `api.honeycomb.io`. |
+| `registry-password` | API, worker, web | ACR admin password, used for image pulls. |
+| `honeycomb-api-key` | API, worker, only when `honeycombApiKey` is supplied | Honeycomb ingest key, passed as `HONEYCOMB_API_KEY`. |
 
-No secret value is committed. `main.bicepparam` reads `POSTGRES_ADMIN_PASSWORD`, `GHCR_USER`
-and `GHCR_TOKEN` from the environment. The Honeycomb key is intentionally not in the parameter
-file; supply it as a pipeline/Paperclip secret. Without it, the Azure apps start and serve
-traffic with tracing disabled (there is no local collector in Azure).
+No secret value is committed. `main.bicepparam` reads `POSTGRES_ADMIN_PASSWORD` from the
+environment. The ACR credential is derived from the registry the template creates; the
+`CONTAINER_REGISTRY_*` parameters exist only to point at a different registry. The Honeycomb
+key is intentionally not in the parameter file; supply it as a pipeline secret. Without it,
+the Azure apps serve traffic with tracing disabled (there is no local collector in Azure),
+and logs plus correlation ids are still emitted.
+
+## Images and image delivery
+
+The images live in the ACR this template creates:
+
+```bash
+az acr login -n rrmclaimsacrt6vxm763riyoo
+docker build -t rrmclaimsacrt6vxm763riyoo.azurecr.io/api:latest    -f docker/api/Dockerfile .
+docker build -t rrmclaimsacrt6vxm763riyoo.azurecr.io/worker:latest -f docker/worker/Dockerfile .
+docker build -t rrmclaimsacrt6vxm763riyoo.azurecr.io/web:latest    -f web/Dockerfile web
+docker push rrmclaimsacrt6vxm763riyoo.azurecr.io/{api,worker,web}:latest
+```
+
+The web image is built from `web/Dockerfile` and uses `web/nginx.conf` unchanged. `nginx.conf`
+sets `proxy_set_header Host $proxy_host`, which is required in Azure because Container Apps
+routes by Host header; the same line is correct in the Compose stack.
+
+`main.bicepparam` leaves the image parameters empty, so the template resolves them to
+`<acr>.azurecr.io/<app>:latest`. Override `containerRegistryServer` and its credential
+parameters only to use a different registry.
 
 ## Cost
 
@@ -93,6 +101,7 @@ Prices are from the Azure Retail Prices API for `canadacentral`, in USD, queried
 | PostgreSQL Flexible Server | storage | $0.1265/GB-month | $4.05 for 32 GiB |
 | PostgreSQL Flexible Server | backup storage | $0.105/GB-month | up to $3.36 for 32 GiB |
 | Service Bus | Standard base unit | $10.00/month | $10.00 |
+| Azure Container Registry | Basic | $0.1666/day | $5.08 |
 | Static Web Apps | Free | $0 | $0 |
 | Log Analytics | analytics logs ingestion | 5 GB/month free, then $2.76/GB | $0 with the 0.1 GB/day cap |
 | Bandwidth | egress | first 100 GB/month free | $0 |
@@ -105,22 +114,15 @@ the vCPU grant by itself. At the current rates, one always-on replica would cost
 $20/month after the grant; four would cost roughly $80/month. That is why scale-to-zero and
 the KEDA queue scaler are requirements, not tuning.
 
-**Expected total**
-
-- With the Azure free-account PostgreSQL offer applying: about **$10/month**, almost all of
-  it the Service Bus Standard base unit. The initial free-account credit may cover this.
-- On a pay-as-you-go subscription, where the PostgreSQL free offer does not apply: about
-  **$31/month** (PostgreSQL compute, storage and backup add about $21/month).
-
-The free-account PostgreSQL offer must be verified after provisioning. It is not a property
-of this template and it does not apply to every subscription. Check Cost Management for the
-resource group, or confirm the offer on the subscription, before assuming the lower number.
+**Expected total: about $36/month while the resource group exists** — Service Bus $10,
+PostgreSQL ~$21, ACR Basic $5.08. The owner approved the ~$31 shape on 2026-10-24 and then
+chose ACR as the image-delivery option, which added $5.08.
 
 **The authenticated subscription is pay-as-you-go.** Its
 `subscriptionPolicies.quotaId` is `PayAsYouGo_2014-09-01` with `spendingLimit: Off`, not a
 free-account quota. The 12-month PostgreSQL offer is a free-account entitlement and, per the
 task, does not apply to pay-as-you-go. There is no subscription metadata here that proves the
-offer is active, so **budget the ~$31/month column**; treat ~$10/month as upside only if Cost
+offer is active, so **budget the ~$36/month figure**; treat ~$10/month as upside only if Cost
 Management later shows the PostgreSQL meters at zero.
 
 ## Self-hosting PostgreSQL: not cheaper on Container Apps
@@ -162,16 +164,8 @@ TLS and backup story. That is a different deployment, not a parameter on this on
 
 **Decision: keep the managed B1ms.** It is free for the 12-month window this interview sits
 in, it includes backups and patching, and it is cheaper than the smallest viable
-self-hosted Container Apps replica. The only recurring line item that survives the free
-offer is Service Bus Standard at $10/month. MassTransit publishes to topics, and Azure
-Storage Queues are not a transport it supports (see the next section); Service Bus Basic
-has no topics and is not a drop-in either. The way to avoid ongoing cost is teardown after
-the interview, not a self-hosted database.
-
-If the goal is zero Azure spend rather than zero ongoing cost, use the no-deploy fallback:
-run the stack with `docker compose` locally for the demo and hand in this directory as
-infrastructure-as-code that was never applied. That is the option this task explicitly
-allows, and it avoids both the PostgreSQL and Service Bus charges.
+self-hosted Container Apps replica. The way to avoid ongoing cost is teardown after the
+interview, not a self-hosted database.
 
 ## Storage Queue instead of Service Bus: not a drop-in
 
@@ -199,60 +193,29 @@ removing MassTransit from that path on both sides:
 Cost, for completeness (canadacentral, USD, Retail Prices API): Queue Storage is about
 $0.004 per 10,000 GPv2 LRS operations plus $0.045/GB-month stored, which is cents per month
 at interview volume, against $10/month for Service Bus Standard. The saving is real, but the
-change is a transport rewrite in product code, not a parameter in this directory, and it
-belongs to the transport task (FIR-9).
+change is a transport rewrite in product code, not a parameter in this directory.
 
-**Decision: keep Service Bus Standard for the interview.** If the goal is zero Azure spend,
-the no-deploy fallback is the better trade: local `docker compose` on RabbitMQ is free and
-needs no rewrite. If the $10 base unit matters after the interview and a rewrite is not
-acceptable, Service Bus **Basic** has no base unit ($0.05 per million operations) but no
-topics; using it means sending to the notification queue instead of publishing, which is a
-smaller product-code change than replacing MassTransit but still couples the API to the
-queue name, the coupling the current design deliberately avoids.
+**Decision: keep Service Bus Standard for the interview.** It is deployed and verified. If
+the $10 base unit matters after the interview and a rewrite is not acceptable, Service Bus
+**Basic** has no base unit ($0.05 per million operations) but no topics; using it means
+sending to the notification queue instead of publishing, which is a smaller product-code
+change than replacing MassTransit but still couples the API to the queue name, the coupling
+the current design deliberately avoids.
 
-## Cost gate and `what-if`
+## Deploying from scratch
 
-The template has been validated offline and previewed against the subscription:
-
-```text
-bicep build deploy/azure/main.bicep   -> exit 0, no diagnostics
-bicep lint  deploy/azure/main.bicep   -> exit 0, no diagnostics
-bicep build-params deploy/azure/main.bicepparam -> exit 0 (with a dummy password)
-az deployment group what-if -g rrm-claims-portal -p deploy/azure/main.bicepparam
-                                      -> exit 0, 13 resources to create, no changes/errors
-```
-
-The `what-if` preview ran on 2026-10-23 with Azure CLI 2.91.0 against an authenticated
-subscription, resource group `rrm-claims-portal` (`canadacentral`, empty apart from its
-`purpose=interview-whatif` tag). It reported the four container apps, the managed
-environment, PostgreSQL flexible server + database + firewall rule, the Service Bus
-namespace + SAS rule + queue, the Log Analytics workspace and the Static Web App as
-`+ Create`, with `minReplicas: 0` on all four apps. It is a read-only preview: no resource
-was created and no provider was registered. It was re-run unchanged on 2026-10-24 after FIR-9
-landed: still 13 creates, no drift.
-
-The resource providers are not registered on the subscription yet
-(`Microsoft.App`, `Microsoft.DBforPostgreSQL` and `Microsoft.ServiceBus` all report
-`NotRegistered`). Registering them is free and is a one-time pre-deploy step; the first
-`az deployment group create` will fail without it:
+The subscription needs the resource providers registered once (free, one-time):
 
 ```bash
-for ns in Microsoft.App Microsoft.DBforPostgreSQL Microsoft.ServiceBus Microsoft.OperationalInsights Microsoft.Web; do
+for ns in Microsoft.App Microsoft.DBforPostgreSQL Microsoft.ServiceBus Microsoft.OperationalInsights Microsoft.Web Microsoft.ContainerRegistry; do
   az provider register --namespace "$ns" --wait
 done
 ```
 
-The cost report and the preview output were posted on the task. **The owner accepted the
-pay-as-you-go shape at about $31/month on 2026-10-24, with the create held until FIR-9 (the
-Service Bus transport swap) landed.** FIR-9 has landed and `what-if` has been re-run with no
-drift, so the shape is ready to create. The only remaining gate is
-[image delivery](#image-delivery-why-the-create-is-held). Once that is resolved, run:
+Then build and push the three images to the ACR the template creates, and deploy:
 
 ```bash
 export POSTGRES_ADMIN_PASSWORD='<strong-password>'
-# Only if the GHCR packages are private:
-# export GHCR_USER='<github-user>'
-# export GHCR_TOKEN='<token>'
 
 az deployment group create \
   --resource-group rrm-claims-portal \
@@ -260,14 +223,56 @@ az deployment group create \
 ```
 
 The deployment outputs the web and Mailpit URLs, the API internal FQDN, the PostgreSQL FQDN,
-the Service Bus namespace/queue and the container app names. The CI deploy stage uses the
-`AZURE_RESOURCE_GROUP` and `AZURE_CONTAINER_APP_{API,WORKER,WEB}` variables; set them to the
-outputs (`rrmclaims-api`, `rrmclaims-worker`, `rrmclaims-web` with the default prefix).
+the Service Bus namespace/queue, the ACR login server and the container app names.
+
+## Drift check
+
+After the last repository audit the template was compiled, linted and previewed against the
+live resource group:
+
+```text
+az bicep build  deploy/azure/main.bicep            -> exit 0, no diagnostics, 14 resources
+az bicep lint   deploy/azure/main.bicep            -> exit 0, no diagnostics
+az bicep build-params deploy/azure/main.bicepparam -> exit 0
+az deployment group what-if -g rrm-claims-portal -p deploy/azure/main.bicepparam
+                                                    -> exit 0
+```
+
+`what-if` reports 9 resources "to modify", but every reported line is a **read-only or
+computed property** (`runningStatus`, `storage.iops`, `storage.tier`,
+`deploymentAuthPolicy`, `trafficSplitting`, and generated defaults) or a runtime expression
+it cannot evaluate. There is no reported change to any image, image registry, scale rule,
+`minReplicas`, ingress setting, environment variable or secret reference. The image names
+resolve from `<acr>.azurecr.io`, which is what the deployed apps already use.
+
+## Known limitations
+
+1. **The CI deploy stage still targets GHCR, not the ACR in use.** `.github/workflows/ci.yml`
+   and `azure-pipelines.yml` push to `ghcr.io` and the deploy stage runs
+   `az containerapp update --image ghcr.io/...`. Arming that stage as-is would replace the
+   working ACR images with private GHCR images the apps cannot pull. The stage is off by
+   default; pointing it at ACR is the remaining CI/CD follow-up. Nothing in the running
+   deployment depends on it.
+2. **Static Web Apps is provisioned but not wired.** The Vite build has no API base URL baked
+   in; it relies on the nginx proxy in the `web` container. The Free SWA resource costs
+   nothing but is not evidence of a second working front end.
+3. **Mailpit is best-effort and public.** It scales to zero and wakes on the same Service Bus
+   queue as the worker. There is a startup race: the worker can attempt delivery before
+   Mailpit is listening, and the worker's retry/redelivery policy tolerates it. In practice a
+   claim submitted to the live stack arrived in Mailpit about 40 seconds after the POST,
+   including both cold starts. The Mailpit UI has no authentication; it is a disposable demo
+   catcher, not a production mail service.
+4. **PostgreSQL is publicly reachable by Azure services.** The firewall rule is the standard
+   `0.0.0.0` "Allow Azure services" rule, because the Container Apps environment is not
+   VNet-integrated. That is acceptable for this disposable demo, not the production shape.
+5. **No Honeycomb key was supplied**, so the Azure apps emit logs, correlation ids and trace
+   ids but do not export spans. Set `honeycombApiKey` to enable it; the local Compose stack
+   uses the bundled collector and Jaeger instead.
 
 ## Teardown
 
 Delete the whole resource group after the interview. It contains every billable resource
-created by this template, including PostgreSQL, Service Bus and the log workspace:
+created by this template, including PostgreSQL, Service Bus, ACR and the log workspace:
 
 ```bash
 az group delete --name rrm-claims-portal --yes --no-wait
@@ -281,44 +286,3 @@ az group exists --name rrm-claims-portal
 
 `false` means the group and its resources are deleted. The Static Web App is free, but it is
 inside the same resource group and is removed by the same command.
-
-If the cost shape is rejected or the demo runs locally instead, delete the empty
-`rrm-claims-portal` group with the same command. It contains no billable resource.
-
-## Known blockers before a live deployment is useful
-
-1. **The Service Bus transport has never been run against a live namespace.** FIR-9 wired the
-   transport into `ClaimPortal.Api/Program.cs` and
-   `ClaimPortal.Notifications/NotificationsServiceCollectionExtensions.cs`, and both apps now
-   select it from `Messaging__Transport=AzureServiceBus` instead of throwing. But the then-current
-   Bicep preview is the only evidence: the topology (topic, subscription, auto-forwarding to the
-   queue) and the `_error` versus native dead-letter behaviour are reviewed, not observed. Expect
-   to verify both on first deployment; see `docs/TRANSPORT.md`.
-2. **Topic naming agrees by construction, but confirm it on the first run.** The worker's
-   `SetKebabCaseEndpointNameFormatter()` names the receive endpoint only; it does not change the
-   message entity name. Both apps use the default entity name formatter, so the API publishes to
-   the `ClaimSubmitted` topic and the worker subscribes to it. The queue name
-   (`claim-submitted-notifications`) is fixed in configuration, pre-created by Bicep, and used
-   directly by the consumer definition.
-3. **Static Web Apps is provisioned but not wired.** The Vite build has no API base URL baked
-   in; it relies on the nginx proxy in the `web` container. Deploying the same bundle to
-   Static Web Apps would need either a linked API backend or an absolute
-   `VITE_API_BASE_URL` plus a CORS policy. The `web` container app is the working front door
-   for this deployment. The Free SWA resource costs nothing but is not evidence of a second
-   working front end.
-4. **Mailpit is best-effort and public.** It scales to zero and wakes on the same Service Bus
-   queue as the worker. There is a startup race: the worker can publish an email before
-   Mailpit is listening, but the worker's retry/redelivery policy tolerates it. The Mailpit
-   UI is exposed publicly and has no authentication; it is a disposable demo catcher, not a
-   production mail service.
-5. **PostgreSQL is publicly reachable by Azure services.** The firewall rule is the standard
-   `0.0.0.0` "Allow Azure services" rule, because the Container Apps environment is not
-   VNet-integrated. That is acceptable for this disposable demo, but it is not the production
-   shape. A VNet-integrated environment and private access would be the next step and would
-   also add cost.
-6. **The container images are not pullable yet.** The GHCR packages are private (the repository
-   is private), the template defaults to anonymous pulls, and the CI deploy stage does not set
-   registry credentials. See [Image delivery](#image-delivery-why-the-create-is-held). This is
-   the gate that holds the create; it is not a Bicep defect. The Service Bus transport likewise
-   has not been exercised against a live namespace. The `web` container app remains the working
-   front door once images resolve.

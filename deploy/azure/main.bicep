@@ -33,14 +33,14 @@ param postgresSkuName string = 'Standard_B1ms'
 @maxValue(16384)
 param postgresStorageGb int = 32
 
-@description('API image, including tag.')
-param apiImage string = 'ghcr.io/amac1986/rrm-claims-portal/api:latest'
+@description('API image, including tag. Empty uses the Azure Container Registry this template creates.')
+param apiImage string = ''
 
-@description('Worker image, including tag.')
-param workerImage string = 'ghcr.io/amac1986/rrm-claims-portal/worker:latest'
+@description('Worker image, including tag. Empty uses the Azure Container Registry this template creates.')
+param workerImage string = ''
 
-@description('Web image, including tag.')
-param webImage string = 'ghcr.io/amac1986/rrm-claims-portal/web:latest'
+@description('Web image, including tag. Empty uses the Azure Container Registry this template creates.')
+param webImage string = ''
 
 @description('Mailpit image, including tag.')
 param mailpitImage string = 'axllent/mailpit:v1.27'
@@ -48,16 +48,13 @@ param mailpitImage string = 'axllent/mailpit:v1.27'
 @description('Service Bus queue consumed by the notification worker and used by KEDA.')
 param serviceBusQueueName string = 'claim-submitted-notifications'
 
-@description('Set when the GHCR packages are private and require registry credentials.')
-param usePrivateRegistry bool = false
+@description('Container registry login server. Empty uses the ACR this template creates.')
+param containerRegistryServer string = ''
 
-@description('Container registry server for private images.')
-param containerRegistryServer string = 'ghcr.io'
-
-@description('Container registry username. Supply from a pipeline secret.')
+@description('Container registry username. Empty uses the ACR admin user this template creates.')
 param containerRegistryUsername string = ''
 
-@description('Container registry password or token. Supply from a pipeline secret.')
+@description('Container registry password. Empty uses the ACR admin password this template creates.')
 @secure()
 param containerRegistryPassword string = ''
 
@@ -68,7 +65,11 @@ param honeycombApiKey string = ''
 @description('Create the free-tier Static Web App resource for the React app.')
 param deployStaticWebApp bool = true
 
+@description('Region for the Static Web App. Static Web Apps is not offered in every region; centralus is used for a canadacentral deployment.')
+param staticWebAppLocation string = 'centralus'
+
 var suffix = uniqueString(resourceGroup().id)
+var containerRegistryName = toLower('${namePrefix}acr${suffix}')
 var logAnalyticsName = toLower('${namePrefix}-logs-${suffix}')
 var serviceBusName = toLower('${namePrefix}-sb-${suffix}')
 var postgresName = toLower('${namePrefix}-pg-${suffix}')
@@ -78,6 +79,33 @@ var workerName = toLower('${namePrefix}-worker')
 var webName = toLower('${namePrefix}-web')
 var mailpitName = toLower('${namePrefix}-mailpit')
 var staticWebAppName = toLower('${namePrefix}-swa-${suffix}')
+
+// The repository is private and its GHCR packages are private, so Container Apps cannot pull
+// them anonymously. A Basic ACR is created and its admin credential is used for the pulls:
+// roughly $5/month, and it keeps the deployment self-contained with no token shared by hand.
+resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
+  name: containerRegistryName
+  location: location
+  tags: tags
+  sku: {
+    name: 'Basic'
+  }
+  properties: {
+    adminUserEnabled: true
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
+// Deterministic where possible: an ACR login server is always <name>.azurecr.io and its admin
+// username is the registry name. Only the password needs listCredentials, which keeps the
+// rendered image names readable in what-if instead of showing a runtime expression.
+var registryServer = empty(containerRegistryServer) ? '${containerRegistryName}.azurecr.io' : containerRegistryServer
+var registryUsername = empty(containerRegistryUsername) ? containerRegistryName : containerRegistryUsername
+var registryPassword = empty(containerRegistryPassword) ? containerRegistry.listCredentials().passwords[0].value : containerRegistryPassword
+
+var apiImageResolved = empty(apiImage) ? '${registryServer}/api:latest' : apiImage
+var workerImageResolved = empty(workerImage) ? '${registryServer}/worker:latest' : workerImage
+var webImageResolved = empty(webImage) ? '${registryServer}/web:latest' : webImage
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: logAnalyticsName
@@ -208,8 +236,8 @@ var serviceBusSecret = {
 }
 
 var registrySecret = {
-  name: 'ghcr-token'
-  value: containerRegistryPassword
+  name: 'registry-password'
+  value: registryPassword
 }
 
 var honeycombSecret = {
@@ -217,7 +245,7 @@ var honeycombSecret = {
   value: honeycombApiKey
 }
 
-var registrySecrets = usePrivateRegistry ? [registrySecret] : []
+var registrySecrets = [registrySecret]
 var telemetrySecrets = empty(honeycombApiKey) ? [] : [honeycombSecret]
 var telemetryEnv = empty(honeycombApiKey)
   ? []
@@ -227,17 +255,17 @@ var telemetryEnv = empty(honeycombApiKey)
         secretRef: 'honeycomb-api-key'
       }
     ]
-var registries = usePrivateRegistry ? [
+var registries = [
   {
-    server: containerRegistryServer
-    username: containerRegistryUsername
-    passwordSecretRef: 'ghcr-token'
+    server: registryServer
+    username: registryUsername
+    passwordSecretRef: 'registry-password'
   }
-] : []
+]
 
 var apiSecrets = concat([postgresSecret, serviceBusSecret], registrySecrets, telemetrySecrets)
 var workerSecrets = concat([postgresSecret, serviceBusSecret], registrySecrets, telemetrySecrets)
-var mailpitSecrets = concat([serviceBusSecret], registrySecrets)
+var mailpitSecrets = [serviceBusSecret]
 var webSecrets = registrySecrets
 
 var apiEnv = concat([
@@ -316,8 +344,10 @@ var workerEnv = concat([
 
 var webEnv = [
   {
+    // Container Apps routes by Host header, so the nginx proxy must send the API's internal
+    // FQDN rather than the browser's Host or a bare service name.
     name: 'API_UPSTREAM'
-    value: '${apiName}:8080'
+    value: '${apiName}.internal.${containerEnvironment.properties.defaultDomain}'
   }
 ]
 
@@ -332,21 +362,26 @@ var mailpitEnv = [
   }
 ]
 
+// Container Apps 2024-03-01 requires the typed shape: HTTP rules under `http`, KEDA rules
+// under `custom` with the scaler type. The older flat `{ type, metadata }` shape is rejected.
 var httpScaleRule = {
   name: 'http'
-  type: 'http'
-  metadata: {
-    concurrentRequests: '10'
+  http: {
+    metadata: {
+      concurrentRequests: '10'
+    }
   }
 }
 
 var serviceBusScaleRule = {
   name: 'servicebus'
-  type: 'azure-servicebus'
-  metadata: {
-    connectionFromEnv: 'SERVICEBUS_CONNECTION'
-    queueName: serviceBusQueueName
-    messageCount: '1'
+  custom: {
+    type: 'azure-servicebus'
+    metadata: {
+      connectionFromEnv: 'SERVICEBUS_CONNECTION'
+      queueName: serviceBusQueueName
+      messageCount: '1'
+    }
   }
 }
 
@@ -418,9 +453,12 @@ module apiApp 'modules/container-app.bicep' = {
     name: apiName
     location: location
     environmentId: containerEnvironment.id
-    image: apiImage
+    image: apiImageResolved
     ingressEnabled: true
     external: false
+    // The web app proxies to the API over plain HTTP inside the environment; without this the
+    // in-environment proxy receives a 301 to HTTPS and the POST never arrives.
+    allowInsecure: true
     targetPort: 8080
     env: apiEnv
     secrets: apiSecrets
@@ -446,7 +484,7 @@ module workerApp 'modules/container-app.bicep' = {
     name: workerName
     location: location
     environmentId: containerEnvironment.id
-    image: workerImage
+    image: workerImageResolved
     // Internal ingress exists only so Container Apps can probe the worker's /health endpoints.
     // It is not external; the consumer still talks to Service Bus, not to HTTP.
     ingressEnabled: true
@@ -475,7 +513,7 @@ module webApp 'modules/container-app.bicep' = {
     name: webName
     location: location
     environmentId: containerEnvironment.id
-    image: webImage
+    image: webImageResolved
     ingressEnabled: true
     external: true
     targetPort: 8080
@@ -511,7 +549,8 @@ module mailpitApp 'modules/container-app.bicep' = {
     ]
     env: mailpitEnv
     secrets: mailpitSecrets
-    registries: registries
+    // Mailpit is pulled from Docker Hub, so the ACR credential does not apply to it.
+    registries: []
     minReplicas: 0
     maxReplicas: 1
     scaleRules: mailpitScaleRules
@@ -526,7 +565,7 @@ module mailpitApp 'modules/container-app.bicep' = {
 
 resource staticWebApp 'Microsoft.Web/staticSites@2023-12-01' = if (deployStaticWebApp) {
   name: staticWebAppName
-  location: location
+  location: staticWebAppLocation
   tags: tags
   sku: {
     name: 'Free'
@@ -549,4 +588,6 @@ output postgresFqdn string = postgres.properties.fullyQualifiedDomainName
 output serviceBusNamespace string = serviceBus.name
 output serviceBusQueue string = serviceBusQueue.name
 output logAnalyticsWorkspace string = logAnalytics.name
+output containerRegistryName string = containerRegistry.name
+output containerRegistryLoginServer string = registryServer
 output staticWebAppDeployed bool = deployStaticWebApp

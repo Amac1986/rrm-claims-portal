@@ -7,20 +7,25 @@ customer a confirmation containing the claim number.
 
 ```
 Browser (React)
-       POST /api/claims
-     
-Claims API  one transaction  PostgreSQL
-                                   claims + outbox_message
-      (outbox dispatcher)
-     
- RabbitMQ  ClaimSubmitted  Notification worker  SMTP  Mailpit (local)
-                                      
-                                       notifications.notification_deliveries (idempotency)
+      |
+      | POST /api/claims
+      v
+Claims API --- one transaction ---> PostgreSQL
+      |                               claims + outbox_message
+      | (outbox dispatcher)
+      v
+ RabbitMQ --- ClaimSubmitted ---> Notification worker --- SMTP ---> Mailpit (local)
+                                        |
+                                        v
+                                  notifications.notification_deliveries (idempotency)
 ```
 
 The architectural rule the assignment tests is structural, not conventional: the API has no
 mail library reference at all (asserted by a test), and only the worker renders and sends the
 confirmation email.
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the component responsibilities, the
+request sequence, data ownership, failure semantics and the rejected alternatives.
 
 ## Quick start
 
@@ -161,10 +166,10 @@ maps directly onto the React form fields. See [`docs/CONTRACT.md`](docs/CONTRACT
 | `src/ClaimPortal.Notifications` | Worker service: MassTransit consumer, Scriban templates, MailKit SMTP, idempotency. |
 | `src/ClaimPortal.Observability` | Shared Serilog JSON logging, correlation-id constants, OTLP tracing, and Postgres/RabbitMQ health probes. |
 | `web` | React + TypeScript + Vite + React Hook Form/Zod form. |
-| `tests` | Domain (56), API (9) and notification-worker (34) tests. |
+| `tests` | Domain (56), API (9), notification-worker (34) and Testcontainers integration (7) tests. |
 | `docker` | Multi-stage Dockerfiles and the RabbitMQ delayed-message plugin image. |
-| `deploy/azure` | Bicep for the optional Azure deployment, with the costed shape and teardown. `what-if`-verified, not deployed. |
-| `docs` | Frozen contract and architecture decision records. |
+| `deploy/azure` | Bicep for the optional Azure deployment, deployed and drift-checked, with the costed shape, live URLs and teardown. |
+| `docs` | [`ARCHITECTURE.md`](docs/ARCHITECTURE.md), the frozen [`CONTRACT.md`](docs/CONTRACT.md), the transport notes and the worker ADR. |
 
 ## Design decisions worth knowing
 
@@ -202,16 +207,8 @@ in the [deployment README](deploy/azure/README.md#storage-queue-instead-of-servi
 
 ## Building and testing locally
 
-.NET 10 SDK 10.0.402 is required. This runner starts shells with `ProgramFiles`, `APPDATA` and
-`LOCALAPPDATA` unset; set them before any `dotnet` command if your environment has the same
-quirk:
-
-```powershell
-$env:ProgramFiles = "C:\Program Files"
-${env:ProgramFiles(x86)} = "C:\Program Files (x86)"
-$env:APPDATA = "$env:USERPROFILE\AppData\Roaming"
-$env:LOCALAPPDATA = "$env:USERPROFILE\AppData\Local"
-```
+.NET 10 SDK (10.0.402 or later), Node.js 22+ and Docker are required. The SDK version is
+pinned in `global.json`; a newer feature band rolls forward automatically.
 
 ```bash
 dotnet build ClaimPortal.sln
@@ -267,50 +264,43 @@ Neither file contains a credential.
   The deploy target is selected by the `AZURE_RESOURCE_GROUP` and
   `AZURE_CONTAINER_APP_{API,WORKER,WEB}` variables, and the stage only runs when the
   `deployEnabled` queue-time parameter is set.
-- Deployment is cost-gated. The infrastructure-as-code lives in [`deploy/azure/`](deploy/azure/README.md);
-  it has been compiled, linted and `what-if`-verified but not deployed, and no billable resource
-  has been created for this project. The deploy stage is provided for the owner to arm after the
-  cost decision, not evidence that a cloud deployment happened.
+- The deployment itself lives in [`deploy/azure/`](deploy/azure/README.md). It is deployed to
+  Azure Container Apps from an ACR built for it; see [Azure deployment](#azure-deployment).
+  The pipelines' deploy stage is still **gated off and still points at GHCR**, so it is not the
+  path that created the live stack and must be repointed at ACR before it is armed.
 - Docker 29's BuildKit exports provenance and SBOM attestations by default. GHCR rejected that
   manifest list in this repository, so the pipelines build with `--provenance=false --sbom=false`
   and label images with `org.opencontainers.image.source` to associate the package with the
   repository. Removing those flags makes the push stage fail with `error from registry: denied`.
 
-## Azure deployment (Bicep, not deployed)
+## Azure deployment
 
-[`deploy/azure/`](deploy/azure/README.md) contains the Bicep for the optional Azure shape:
-Container Apps for the API, worker, web and Mailpit, PostgreSQL Flexible Server B1ms, Service
-Bus Standard, a Free-tier Static Web App and a capped Log Analytics workspace. Every app has
-`minReplicas: 0`; the worker scales on Service Bus queue depth through KEDA, so the stack costs
-nothing at rest and stays inside the Container Apps Consumption free grant at demo volume.
+The optional Azure stack is **deployed and verified**, not just previewed:
 
-The template is **authored, offline-validated and `what-if`-verified, not deployed**. `bicep
-build` and `bicep lint` both pass with no diagnostics. `az deployment group what-if` ran against
-the real subscription in an empty `rrm-claims-portal` resource group and predicted **13 resources
-to create**, with no unexpected changes or deletes. It is a read-only preview: no resource was
-created and no provider was registered. The priced shape, the cost gate, the exact commands and
-the teardown are in the [deployment README](deploy/azure/README.md#cost). In short: about
-$31/month on this pay-as-you-go subscription, with Service Bus Standard ($10) and PostgreSQL
-($21) as the line items; ~$10/month only if the PostgreSQL free-account offer turns out to
-apply. Nothing billable has been created.
+| Endpoint | URL |
+| --- | --- |
+| Claim form | https://rrmclaims-web.nicestone-07c13314.canadacentral.azurecontainerapps.io |
+| Mailpit | https://rrmclaims-mailpit.nicestone-07c13314.canadacentral.azurecontainerapps.io |
 
-The create is currently held on **image delivery**, not on the transport: the GHCR packages are
-private (the repository is private), the template defaults to anonymous pulls, and the CI
-deploy stage does not set registry credentials, so Container Apps would fail its first image
-pull. The template already supports a private-registry credential (`usePrivateRegistry` with
-`GHCR_USER`/`GHCR_TOKEN`); the options and their cost are in the
-[deployment README](deploy/azure/README.md#image-delivery-why-the-create-is-held).
+Container Apps runs the API, worker, web and Mailpit; PostgreSQL Flexible Server B1ms, Service
+Bus Standard, an ACR Basic registry, a Free-tier Static Web App and a capped Log Analytics
+workspace round it out. Every app has `minReplicas: 0`; the worker scales on Service Bus queue
+depth through KEDA, so the stack costs nothing at rest and stays inside the Container Apps
+Consumption free grant at demo volume.
 
-The API and worker now implement the Service Bus arm: `Messaging:Transport=AzureServiceBus` plus
-the namespace connection string selects it, with no consumer or contract change (see
-[`docs/TRANSPORT.md`](docs/TRANSPORT.md)). The Bicep already sets those variables and the
-`servicebus-connection-string` secret, so the template no longer deploys an app that throws. The
-transport has **not been exercised against a live namespace**: no resource has been created and
-the Service Bus emulator was not run, so the first real deployment is still the moment the
-Service Bus topology and `_error` behaviour are first observed. The Bicep defines a free-tier
-Static Web App but does not wire it; the Container Apps `web` app is the working front door.
+**Verified on the live stack:** a claim posted through the public web origin returned `201`
+(`CLM-20261024-VR1FK4`), was persisted, was consumed from Service Bus by the KEDA-scaled worker,
+and arrived in the live Mailpit with the claim number in the body. A first request after idle
+takes 30-60 seconds while the apps cold-start.
 
-Teardown, once the owner has deployed and finished with it:
+`bicep build` and `bicep lint` pass with no diagnostics, `what-if` against the live resource
+group reports no meaningful drift, and the committed template is the one that was deployed. It
+creates an ACR because the repository, and therefore its GHCR packages, are private; the apps
+pull with the ACR admin credential held as a Container Apps secret. Cost, deployment commands
+and the exact limitations are in the [deployment README](deploy/azure/README.md#cost): about
+**$36/month** while the group exists, on this pay-as-you-go subscription.
+
+Teardown stops all of it:
 
 ```bash
 az group delete --name rrm-claims-portal --yes --no-wait
@@ -332,13 +322,18 @@ az group delete --name rrm-claims-portal --yes --no-wait
   `/health/ready` returned `503` with `postgres unhealthy`; with RabbitMQ stopped, both returned
   `503` with `rabbitmq unhealthy`. `/health/live` stayed `200` throughout, as intended.
 - Invalid submissions return the expected camelCase/dotted error keys.
-- The API, domain and worker build with zero warnings; the .NET and web suites pass.
-- **Not yet verified:** Playwright browser tests (the optional E2E task), the Azure Service Bus
-  transport against a live namespace or emulator, and a live Azure deployment. The Bicep is
-  committed, linted and `what-if`-verified (13 resources to create against an empty resource
-  group), but it is cost-gated and was not deployed. Azure DevOps is provided but has not run
-  (see [CI/CD pipelines](#cicd-pipelines)); GitHub Actions is proven green. No claim is made that
-  unrun pipelines, brokers or infrastructure work.
+- The API, domain and worker build with zero warnings; 106 .NET tests (domain, API, worker and
+  Testcontainers integration) and 100 web tests pass locally.
+- Playwright browser tests are green in CI: the `Playwright E2E` job passed on commit `ef4bfdc`
+  and on the current head, alongside the integration and unit jobs (see
+  [CI/CD pipelines](#cicd-pipelines)).
+- The Azure deployment is live and was verified end to end, including the Service Bus transport
+  against a real namespace: claim `CLM-20261024-VR1FK4` was submitted through the public web
+  origin and received in the live Mailpit. See [Azure deployment](#azure-deployment).
+- **Not verified:** Azure DevOps has never run (the hosted-parallelism gate is unconfigured),
+  no Honeycomb key is set in Azure so remote trace export is unused there, and the pipelines'
+  deploy stage has not been repointed from GHCR to the ACR in use. None of those affects the
+  local demo, which is what the brief grades; the README does not describe them as working.
 
 ## AI use statement
 

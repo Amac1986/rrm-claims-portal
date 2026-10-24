@@ -16,6 +16,9 @@ param ingressEnabled bool = false
 @description('Expose the app outside the Container Apps environment.')
 param external bool = false
 
+@description('Allow plain HTTP ingress inside the Container Apps environment. Required when another app proxies to this one over HTTP.')
+param allowInsecure bool = false
+
 @description('Container port targeted by HTTP ingress.')
 param targetPort int = 0
 
@@ -64,7 +67,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
         external: external
         targetPort: targetPort
         transport: 'http'
-        allowInsecure: false
+        allowInsecure: allowInsecure
         additionalPortMappings: additionalPortMappings
       } : null
       secrets: secrets

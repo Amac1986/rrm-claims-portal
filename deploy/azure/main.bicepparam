@@ -4,10 +4,9 @@ param location = 'canadacentral'
 param namePrefix = 'rrmclaims'
 param postgresAdminLogin = 'claimportal'
 param postgresAdminPassword = readEnvironmentVariable('POSTGRES_ADMIN_PASSWORD')
-param apiImage = 'ghcr.io/amac1986/rrm-claims-portal/api:latest'
-param workerImage = 'ghcr.io/amac1986/rrm-claims-portal/worker:latest'
-param webImage = 'ghcr.io/amac1986/rrm-claims-portal/web:latest'
-param usePrivateRegistry = false
-param containerRegistryUsername = readEnvironmentVariable('GHCR_USER', '')
-param containerRegistryPassword = readEnvironmentVariable('GHCR_TOKEN', '')
+// Images default to the ACR this template creates; override only for a different registry.
+param containerRegistryServer = readEnvironmentVariable('CONTAINER_REGISTRY_SERVER', '')
+param containerRegistryUsername = readEnvironmentVariable('CONTAINER_REGISTRY_USERNAME', '')
+param containerRegistryPassword = readEnvironmentVariable('CONTAINER_REGISTRY_PASSWORD', '')
 param deployStaticWebApp = true
+param staticWebAppLocation = 'centralus'
