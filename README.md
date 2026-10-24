@@ -96,6 +96,7 @@ maps directly onto the React form fields. See [`docs/CONTRACT.md`](docs/CONTRACT
 | `web` | React + TypeScript + Vite + React Hook Form/Zod form. |
 | `tests` | Domain (56), API (9) and notification-worker (34) tests. |
 | `docker` | Multi-stage Dockerfiles and the RabbitMQ delayed-message plugin image. |
+| `deploy/azure` | Bicep for the optional Azure deployment, with the costed shape and teardown. Not deployed. |
 | `docs` | Frozen contract and architecture decision records. |
 
 ## Design decisions worth knowing
@@ -194,13 +195,41 @@ Neither file contains a credential.
   The deploy target is selected by the `AZURE_RESOURCE_GROUP` and
   `AZURE_CONTAINER_APP_{API,WORKER,WEB}` variables, and the stage only runs when the
   `deployEnabled` queue-time parameter is set.
-- Deployment is cost-gated. No Azure resource has been created for this project; the deploy stage
-  is provided for the owner to arm after the cost decision, not evidence that a cloud deployment
-  happened.
+- Deployment is cost-gated. The infrastructure-as-code lives in [`deploy/azure/`](deploy/azure/README.md);
+  it has been compiled and linted but not deployed, and no Azure resource has been created for
+  this project. The deploy stage is provided for the owner to arm after the cost decision, not
+  evidence that a cloud deployment happened.
 - Docker 29's BuildKit exports provenance and SBOM attestations by default. GHCR rejected that
   manifest list in this repository, so the pipelines build with `--provenance=false --sbom=false`
   and label images with `org.opencontainers.image.source` to associate the package with the
   repository. Removing those flags makes the push stage fail with `error from registry: denied`.
+
+## Azure deployment (Bicep, not deployed)
+
+[`deploy/azure/`](deploy/azure/README.md) contains the Bicep for the optional Azure shape:
+Container Apps for the API, worker, web and Mailpit, PostgreSQL Flexible Server B1ms, Service
+Bus Standard, a Free-tier Static Web App and a capped Log Analytics workspace. Every app has
+`minReplicas: 0`; the worker scales on Service Bus queue depth through KEDA, so the stack costs
+nothing at rest and stays inside the Container Apps Consumption free grant at demo volume.
+
+The template is **authored and offline-validated, not deployed**. `bicep build` and `bicep lint`
+both pass with no diagnostics. `az deployment group what-if` has not been run because this build
+host has no Azure CLI or authenticated subscription. The priced shape, the cost gate, the exact
+commands and the teardown are in the [deployment README](deploy/azure/README.md#cost). In short:
+about $10/month with the free-account PostgreSQL offer applying, about $31/month otherwise, with
+Service Bus Standard as the recurring line item. Nothing billable has been created.
+
+A live deployment is blocked on the FIR-9 Service Bus transport swap: both the API and the worker
+still throw `NotSupportedException` when `Messaging:Transport` is `AzureServiceBus`. The Bicep
+sets the target configuration honestly rather than pretending the apps work today. The Bicep
+defines a free-tier Static Web App but does not wire it; the Container Apps `web` app is the
+working front door once the Service Bus transport lands.
+
+Teardown, once the owner has deployed and finished with it:
+
+```bash
+az group delete --name rrm-claims-portal --yes --no-wait
+```
 
 ## Verified status (honest notes)
 
@@ -211,8 +240,10 @@ Neither file contains a credential.
   second claim was verified the same way after the JSON timestamp/enum fixes.
 - Invalid submissions return the expected camelCase/dotted error keys.
 - The API, domain and worker build with zero warnings; the .NET and web suites pass.
-- **Not yet verified:** Playwright browser tests (the optional E2E task) and the Azure deployment
-  (cost-gated and intentionally not created). Azure DevOps is provided but has not run (see
+- **Not yet verified:** Playwright browser tests (the optional E2E task) and a live Azure
+  deployment. The Bicep is committed and offline-validated, but it is cost-gated and was not
+  deployed; `what-if` was not run because the build host has no authenticated subscription.
+  Azure DevOps is provided but has not run (see
   [CI/CD pipelines](#cicd-pipelines)); GitHub Actions is proven green. No claim is made that
   unrun pipelines or infrastructure work.
 
