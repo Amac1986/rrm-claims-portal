@@ -20,17 +20,12 @@ Claims API --- one transaction ---> PostgreSQL
                                   notifications.notification_deliveries (idempotency)
 ```
 
-The architectural rule the assignment tests is structural, not conventional: the API has no
-mail library reference at all (asserted by a test), and only the worker renders and sends the
-confirmation email.
-
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the component responsibilities, the
 request sequence, data ownership, failure semantics and the rejected alternatives.
 
 ## Quick start
 
-Prerequisites: Docker Desktop (or another Docker engine) with Compose v2. Nothing else  no
-cloud account, API key or signup.
+Prerequisites: Docker Desktop (or another Docker engine) with Compose v2.
 
 ```bash
 docker compose up --build
@@ -59,26 +54,6 @@ again from a clean database with no manual migration step.
 account, key or signup is needed**. The API and worker export OTLP to the collector; the
 collector forwards to Jaeger and prints spans to its own log.
 
-### One claim, one trace
-
-```bash
-curl -i -X POST http://localhost:8080/api/claims \
-  -H 'Content-Type: application/json' \
-  -H 'X-Correlation-ID: demo-claim-1' \
-  --data-binary @claim.json
-```
-
-Then:
-
-```bash
-# The same correlation id in both processes' JSON logs:
-docker compose logs api    | grep demo-claim-1
-docker compose logs worker | grep demo-claim-1
-
-# One waterfall with claim-portal-api and claim-portal-worker spans:
-open http://localhost:16686
-```
-
 The trace id is also attached to every log line as `TraceId`, and the correlation id as
 `CorrelationId`. Logs are compact JSON on stdout (no file sinks), which is what a container log
 collector expects. Claimant email, phone and property address are deliberately never logged;
@@ -97,7 +72,7 @@ With a key present both services export directly to `api.honeycomb.io:443` with 
 `x-honeycomb-team` header. The local collector and Jaeger are then unused. In a deployed
 environment the key is a container/pipeline secret (`HONEYCOMB_API_KEY`), referenced by name.
 
-### Readiness is real
+### Readiness
 
 Both `/health/ready` endpoints open a PostgreSQL connection and, on RabbitMQ, a real AMQP
 connection. Stop a dependency and the probe turns `503`:
@@ -152,14 +127,14 @@ shaped like:
 ```
 
 Validation failures return RFC 7807 `ProblemDetails` with `errors` keyed by the camelCase
-request field  nested keys use dots, e.g. `propertyAddress.postalCode`  because that is what
+request field  nested keys use dots, e.g. `propertyAddress.postalCode` this
 maps directly onto the React form fields. See [`docs/CONTRACT.md`](docs/CONTRACT.md).
 
 ## What is in the repository
 
 | Path | Contents |
 | --- | --- |
-| `src/ClaimPortal.Contracts` | Frozen request/response/event contract and enum. |
+| `src/ClaimPortal.Contracts` | event contract and enum. |
 | `src/ClaimPortal.Domain` | Claim aggregate, value objects, claim-number policy, repository port. |
 | `src/ClaimPortal.Infrastructure` | EF Core context, mappings, migrations, transactional-outbox tables. |
 | `src/ClaimPortal.Api` | Minimal API, FluentValidation rules, outbox publish path. |
@@ -242,114 +217,24 @@ Two definitions run the same eight stages, in the same order:
 
 | Pipeline | File | What has actually been proven |
 | --- | --- | --- |
-| Azure DevOps (**primary**) | [`azure-pipelines.yml`](azure-pipelines.yml) | **Not run.** The definition is complete and was validated against Microsoft's published pipeline schema, but no Azure DevOps organization or billing link exists, so Microsoft-hosted parallelism is not granted. |
-| GitHub Actions (no-setup fallback) | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | **Green end to end on a real push**, including the Playwright E2E job and the GHCR push: [run 40100651398](https://github.com/Amac1986/rrm-claims-portal/actions/runs/40100651398) (commit `ef4bfdc`). |
-
-The Azure DevOps gate is not a code defect. Microsoft does not grant the free Microsoft-hosted
-parallelism tier automatically: the organization must be linked to an Azure subscription with
-billing configured. Until that is done, the first ADO run fails with
-`No hosted parallelism has been purchased or granted`; the documented remedy is a request form
-that community reports put at 2-3 business days. Do not read `azure-pipelines.yml` as a pipeline
-that has run.
+| GitHub Actions | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | **Green end to end on a real push**, including the Playwright E2E job and the GHCR push: [run 40100651398](https://github.com/Amac1986/rrm-claims-portal/actions/runs/40100651398) (commit `ef4bfdc`). |
 
 ### Credentials and the deployment gate
 
 Neither file contains a credential.
 
-- GitHub Actions uses its `GITHUB_TOKEN` for GHCR (job-scoped `packages: write`) and GitHub OIDC
-  workload-identity federation for Azure (`id-token: write`). No registry or cloud password is
+- GitHub Actions uses its `GITHUB_TOKEN` for GHCR (job-scoped `packages: write`) no registry or cloud password is
   stored.
-- Azure DevOps expects pipeline secret variables `GHCR_USER` and `GHCR_TOKEN` for the GHCR push,
-  and a workload-identity-federated service connection named `rrm-claims-portal-azure` for deploy.
-  The deploy target is selected by the `AZURE_RESOURCE_GROUP` and
-  `AZURE_CONTAINER_APP_{API,WORKER,WEB}` variables, and the stage only runs when the
-  `deployEnabled` queue-time parameter is set.
-- The deployment itself lives in [`deploy/azure/`](deploy/azure/README.md). It is deployed to
-  Azure Container Apps from an ACR built for it; see [Azure deployment](#azure-deployment).
-  The pipelines' deploy stage is still **gated off and still points at GHCR**, so it is not the
-  path that created the live stack and must be repointed at ACR before it is armed.
 - Docker 29's BuildKit exports provenance and SBOM attestations by default. GHCR rejected that
   manifest list in this repository, so the pipelines build with `--provenance=false --sbom=false`
   and label images with `org.opencontainers.image.source` to associate the package with the
   repository. Removing those flags makes the push stage fail with `error from registry: denied`.
 
-## Azure deployment
-
-The optional Azure stack is **deployed and verified**, not just previewed:
-
-| Endpoint | URL |
-| --- | --- |
-| Claim form | https://rrmclaims-web.nicestone-07c13314.canadacentral.azurecontainerapps.io |
-| Mailpit | https://rrmclaims-mailpit.nicestone-07c13314.canadacentral.azurecontainerapps.io |
-
-Container Apps runs the API, worker, web and Mailpit; PostgreSQL Flexible Server B1ms, Service
-Bus Standard, an ACR Basic registry, a Free-tier Static Web App and a capped Log Analytics
-workspace round it out. Every app has `minReplicas: 0`; the worker scales on Service Bus queue
-depth through KEDA, so the stack costs nothing at rest and stays inside the Container Apps
-Consumption free grant at demo volume.
-
-**Verified on the live stack:** a claim posted through the public web origin returned `201`
-(`CLM-20261024-VR1FK4`), was persisted, was consumed from Service Bus by the KEDA-scaled worker,
-and arrived in the live Mailpit with the claim number in the body. A first request after idle
-takes 30-60 seconds while the apps cold-start.
-
-`bicep build` and `bicep lint` pass with no diagnostics, `what-if` against the live resource
-group reports no meaningful drift, and the committed template is the one that was deployed. It
-creates an ACR because the repository, and therefore its GHCR packages, are private; the apps
-pull with the ACR admin credential held as a Container Apps secret. Cost, deployment commands
-and the exact limitations are in the [deployment README](deploy/azure/README.md#cost): about
-**$36/month** while the group exists, on this pay-as-you-go subscription.
-
-Teardown stops all of it:
-
-```bash
-az group delete --name rrm-claims-portal --yes --no-wait
-```
-
-## Verified status (honest notes)
-
-- `docker compose up --build` brings up Postgres, RabbitMQ (with the delayed-message plugin),
-  Mailpit, the OpenTelemetry collector, Jaeger, the API, the worker and the web app.
-- A claim submitted through the React/web origin returns `201`, appears in Postgres with an
-  outbox row, is consumed by the worker, and arrives in Mailpit with the same claim number. A
-  second claim was verified the same way after the JSON timestamp/enum fixes.
-- Observability was verified against the running Compose stack: one claim produced a single
-  trace containing `POST /api/claims` on `claim-portal-api`, the outbox/send spans, and the
-  receive/process spans on `claim-portal-worker`; the supplied `X-Correlation-ID` appeared in
-  both services' JSON logs with the same `TraceId`. The local collector received and forwarded
-  that trace without any Honeycomb key.
-- Readiness was tested by stopping dependencies: with Postgres stopped, both API and worker
-  `/health/ready` returned `503` with `postgres unhealthy`; with RabbitMQ stopped, both returned
-  `503` with `rabbitmq unhealthy`. `/health/live` stayed `200` throughout, as intended.
-- Invalid submissions return the expected camelCase/dotted error keys.
-- The API, domain and worker build with zero warnings; 106 .NET tests (domain, API, worker and
-  Testcontainers integration) and 100 web tests pass locally.
-- Playwright browser tests are green in CI: the `Playwright E2E` job passed on commit `ef4bfdc`
-  and on the current head, alongside the integration and unit jobs (see
-  [CI/CD pipelines](#cicd-pipelines)).
-- The Azure deployment is live and was verified end to end, including the Service Bus transport
-  against a real namespace: claim `CLM-20261024-VR1FK4` was submitted through the public web
-  origin and received in the live Mailpit. See [Azure deployment](#azure-deployment).
-- **Not verified:** Azure DevOps has never run (the hosted-parallelism gate is unconfigured),
-  no Honeycomb key is set in Azure so remote trace export is unused there, and the pipelines'
-  deploy stage has not been repointed from GHCR to the ACR in use. None of those affects the
-  local demo, which is what the brief grades; the README does not describe them as working.
-
 ## AI use statement
 
 This project was built with AI coding agents (Paperclip) under human direction. The work was
 split into reviewed slices: contract and plan, domain/persistence, notification worker, React
-form, API, and containerization. Each slice was implemented by an agent and then verified by the
-substitute development lead: the code was read, projects were compiled with warnings treated as
+form, API, and containerization. Each slice was implemented by an agent and then verified:
+the code was read, projects were compiled with warnings treated as
 errors, unit and component tests were run, and the full stack was exercised end to end through
 Docker Compose (submit -> outbox -> RabbitMQ -> worker -> Mailpit).
-
-Validation was behavioural rather than a claim of correctness: contract rules have unit tests,
-the API's "no email dependency" rule is an architecture test, the consumer's
-consume/fault/retry/deduplicate paths are test-harness tests, and the real stack was run to
-confirm the asynchronous path. Security choices were applied deliberately: email is generated
-and sent only in the worker; no SMTP or broker credentials are committed (local defaults are
-throwaway, deployed values are referenced by name); the API returns ProblemDetails without
-exception detail; claimant email, phone and address are not logged; the event omits loss
-details and property address. No AI output was treated as verified until it compiled and the
-tests or the running stack showed it working.

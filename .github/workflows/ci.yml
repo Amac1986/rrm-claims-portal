@@ -1,12 +1,4 @@
-# GitHub Actions - the no-setup fallback pipeline, kept green alongside the primary
-# Azure DevOps definition in azure-pipelines.yml.
-#
-# Same stages as the ADO pipeline: restore, build, unit tests, integration tests, Playwright
-# end-to-end tests, container build, push to ghcr.io, deploy. The deploy stage is gated off by default:
-#   * set the repository variable DEPLOY_ENABLED to "true" to arm it, and
-#   * configure the "production" environment with required reviewers.
-# It authenticates with OIDC workload identity federation (no stored Azure secret).
-#
+# GitHub Actions 
 # Images are pushed to GitHub Container Registry with the workflow's own GITHUB_TOKEN, so
 # there is no registry password in this repository.
 
@@ -244,41 +236,3 @@ jobs:
               docker push "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${component}:latest"
             fi
           done
-
-  deploy:
-    name: Deploy
-    needs: push
-    if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: production
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Azure login (OIDC workload identity)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: Update container app revisions
-        env:
-          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
-          API_APP: ${{ vars.AZURE_CONTAINER_APP_API }}
-          WORKER_APP: ${{ vars.AZURE_CONTAINER_APP_WORKER }}
-          WEB_APP: ${{ vars.AZURE_CONTAINER_APP_WEB }}
-          TAG: sha-${{ github.sha }}
-        run: |
-          set -euo pipefail
-          : "${RESOURCE_GROUP:?set the AZURE_RESOURCE_GROUP repository variable}"
-          : "${API_APP:?set the AZURE_CONTAINER_APP_API repository variable}"
-          : "${WORKER_APP:?set the AZURE_CONTAINER_APP_WORKER repository variable}"
-          : "${WEB_APP:?set the AZURE_CONTAINER_APP_WEB repository variable}"
-
-          az containerapp update --resource-group "$RESOURCE_GROUP" --name "$API_APP" \
-            --image "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/api:${TAG}"
-          az containerapp update --resource-group "$RESOURCE_GROUP" --name "$WORKER_APP" \
-            --image "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/worker:${TAG}"
-          az containerapp update --resource-group "$RESOURCE_GROUP" --name "$WEB_APP" \
-            --image "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/web:${TAG}"

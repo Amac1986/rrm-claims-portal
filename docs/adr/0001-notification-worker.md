@@ -194,28 +194,3 @@ failing the send.
   deduplication from a send that did not happen.
 - `global.json` opts `dotnet test` into Microsoft.Testing.Platform, which xunit.v3 requires on
   the .NET 10 SDK.
-
-## 11. Verified status
-
-Everything in this ADR has been exercised against a real stack, not only reviewed. The
-original version of this section said the opposite because Docker was unavailable at the time;
-that is no longer true.
-
-- **End to end on Compose.** `docker compose up --build` starts Postgres, RabbitMQ (with the
-  delayed-message plugin), Mailpit, the OpenTelemetry collector, Jaeger, the API, the worker
-  and the web app. A claim submitted through the web origin returns `201`, is committed with
-  its outbox row, is consumed by the worker, and arrives in Mailpit with the same claim
-  number. Reproduced during the pre-hand-in audit as `CLM-20261024-7PNVTD`.
-- **The Npgsql migration against real Postgres.** The API and worker apply their migrations on
-  start; the claim and outbox tables are created in the `public` schema and the delivery table
-  in `notifications`. The Testcontainers integration suite also runs the real migrations
-  against real Postgres, not SQLite.
-- **The delivery protocol on real Postgres.** The `notification_deliveries` row moves
-  claim → sent, and a redelivery of the same `MessageId` does not send a second email.
-- **Azure Service Bus, live.** `Messaging:Transport=AzureServiceBus` is deployed and a claim
-  submitted through the public web origin was consumed from the real namespace by the KEDA-
-  scaled worker and delivered to Mailpit, so the topic/subscription topology works as designed.
-- **Retry and redelivery.** The retry/redelivery paths are covered by the consumer harness
-  tests. They have not been induced against a real broker outage in production, and the
-  `_error` queue has not been observed filling and draining. That remains a documented
-  operator path rather than an exercised one.
